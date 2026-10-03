@@ -139,6 +139,16 @@ Tracesは今回有効にしない。
 
 ## Workers Buildsでpush時に配備する
 
+この環境ではTerraformで本体だけ作成したWorkerは、バージョンがない間SettingsのConnectが無効だった。
+同じ状態の場合は、初回だけ以下でアプリを配備し、設定画面を再読み込みする。
+
+```sh
+source .env.cloudflare
+pnpm verify
+pnpm run deploy
+```
+
+以後のアプリ配備はWorkers Buildsへ任せる。
 CloudflareのWorker画面のConnect to Gitから`ikki0006/ai-family-assistant`を接続する。
 GitHub Appの初回認可では対象リポジトリだけを許可する。
 GitHub Actionsの配備workflowは使用しない。

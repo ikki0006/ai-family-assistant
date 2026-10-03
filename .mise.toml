@@ -1,0 +1,4 @@
+[tools]
+node = "22.22.3"
+pnpm = "10.11.0"
+terraform = "1.12.2"

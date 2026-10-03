@@ -1,0 +1,46 @@
+/** @type {import('dependency-cruiser').IConfiguration} */
+module.exports = {
+	forbidden: [
+		{ name: "no-circular", severity: "error", from: {}, to: { circular: true } },
+		{ name: "no-unresolved", severity: "error", from: {}, to: { couldNotResolve: true } },
+		{
+			name: "application-depends-on-core-only",
+			severity: "error",
+			from: { path: "^src/application/" },
+			to: { pathNot: "^src/application/" },
+		},
+		{
+			name: "ports-do-not-depend-on-use-cases",
+			severity: "error",
+			from: { path: "^src/application/ports/" },
+			to: { path: "^src/application/(?!ports/)" },
+		},
+		{
+			name: "presentation-does-not-construct-adapters",
+			severity: "error",
+			from: { path: "^src/presentation/" },
+			to: { path: "^src/(infrastructure|bootstrap)/" },
+		},
+		{
+			name: "infrastructure-implements-ports",
+			severity: "error",
+			from: { path: "^src/infrastructure/" },
+			to: { path: "^src/(presentation|bootstrap)/|^src/application/(?!ports/)" },
+		},
+		{
+			name: "entrypoint-is-not-importable",
+			severity: "error",
+			from: { path: "^src/" },
+			to: { path: "^src/index\\.ts$" },
+		},
+	],
+	options: {
+		enhancedResolveOptions: {
+			exportsFields: ["exports"],
+			conditionNames: ["import", "types", "default"],
+		},
+		doNotFollow: { path: "node_modules" },
+		tsPreCompilationDeps: true,
+		tsConfig: { fileName: "tsconfig.json" },
+	},
+};

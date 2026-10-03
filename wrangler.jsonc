@@ -1,0 +1,25 @@
+{
+	"$schema": "./node_modules/wrangler/config-schema.json",
+	"name": "ai-family-assistant",
+	"main": "src/index.ts",
+	"workers_dev": true,
+	"preview_urls": false,
+	"compatibility_date": "2026-04-17",
+	"compatibility_flags": ["nodejs_compat"],
+	"observability": {
+		"enabled": true,
+		"head_sampling_rate": 1,
+		"logs": { "enabled": true, "invocation_logs": true, "persist": true }
+	},
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "ai-family-assistant-db",
+			"database_id": "747e99fb-e7bb-48dc-911c-99bf68ec88a4",
+			"migrations_dir": "migrations"
+		}
+	],
+	"queues": {
+		"producers": [{ "binding": "JOBS_QUEUE", "queue": "ai-family-assistant-jobs" }]
+	}
+}

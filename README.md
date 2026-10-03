@@ -1,0 +1,169 @@
+# AI Family Assistant
+
+家族のLINEグループで会話の記憶と通知を扱うアシスタント。
+現在は`GET /health`と、LINEの`@bot ping`に`pong`を返す疎通機能を実装している。
+DB、AI、記憶、定期通知は未実装。
+
+- [ディレクトリ構成と責務](docs/architecture.md)
+- [設計判断の一覧](docs/adr/README.md)
+
+## 開発環境
+
+Nodeとpnpmの標準バージョンは`.mise.toml`、pnpmの固定バージョンは`package.json`に記載する。
+`mise install`で合わせるか、同じバージョンを手動で用意する。
+
+```sh
+pnpm install
+cp .dev.vars.example .dev.vars
+pnpm hooks:install
+pnpm dev
+```
+
+初回の依存解決後に生成される`pnpm-lock.yaml`をコミットする。
+以後のCIと再インストールには`pnpm install --frozen-lockfile`を使う。
+依存パッケージを取得できない環境では、設定ファイルの作成と全ツールの動作検証を区別する。
+
+`.dev.vars`にLINEのChannel secret、Channel access token、所有者のuser IDを設定する。
+所有者のuser IDはLINE Developersのチャネル基本設定にある「あなたのユーザーID」で確認する。
+アプリは`.env`を併用せず、本番ではWorkers Secretsを使う。
+設定不足時はWebhookが503を返すが、ローカルURLの`/health`にはアクセスできる。
+架空のデータだけをテストに使い、実際の会話やAPIキーをfixtureに保存しない。
+
+## 最初の動作確認
+
+1. LINE公式アカウントのMessaging APIとグループへの参加を有効化する。
+2. Workerを配備し、LINE設定のWebhook URLを`https://<worker>.<subdomain>.workers.dev/webhooks/line`にする。
+3. 下記の手順でWorkers Secretsを登録する。
+4. LINEのWebhook検証と利用を有効にし、定型の応答メッセージは無効にする。
+5. 所有者の1対1トークで`ping`、またはグループでbotを選んで`@bot ping`と送る。
+6. `pong`が返ることを確認する。
+7. 所有者が`@bot グループID`と送り、返されたIDを`LINE_ALLOWED_GROUP_ID`へ設定すると、そのグループの家族全員が呼びかけられる。
+
+`@bot`は例示であり、LINEのメンション候補から実際のbotを選択する。
+同じ文字列を入力しただけの場合、他人宛てのメンション、全員宛てのメンションには反応しない。
+グループID未設定時の疎通は所有者だけに制限する。
+ローカルのlocalhostへLINEから直接接続はできないため、実LINEの確認には公開したHTTPS URLが必要になる。
+
+## 品質チェック
+
+| コマンド | 内容 |
+| --- | --- |
+| `pnpm check` | Biome、依存方向、ADR形式を検査。ファイルを書き換えない |
+| `pnpm check:lint` | Lintだけ実行 |
+| `pnpm check:format` | 整形の差分だけ検査 |
+| `pnpm fix` | Biomeで安全な自動修正と整形 |
+| `pnpm format` | 整形だけ実行 |
+| `pnpm typecheck` | 通常の型検査と、外部ランタイム型を除外したcoreの型検査 |
+| `pnpm test` | Node環境の単体テスト |
+| `pnpm test:workers` | Workers環境の結合テスト |
+| `pnpm verify` | 全チェック、テスト、ビルド、Terraform書式を検査 |
+
+Biomeはタブ幅2、行幅100で、名前付きexportを基本とする。
+`.vscode/settings.json`で保存時のBiome整形を設定している。
+Lefthookは設定済みだが、Gitフックへの登録には`pnpm hooks:install`が必要。
+
+## インフラ
+
+CloudflareリソースはTerraform、アプリ配備はWorkers BuildsからWranglerで管理する。
+`infra/`にWorker、公開設定、D1、ジョブ用Queue、DLQを定義する。
+D1の`DB` bindingと通常Queueの`JOBS_QUEUE` producerをwrangler.jsoncに設定している。
+これらのbindingは次回アプリ配備で反映される。DBのテーブル、Queue consumerとDLQへの振り分け、Cronは処理実装時に追加する。
+詳細は[ADR-0008](docs/adr/0008-workers-builds-and-provisioned-resources.md)を参照する。
+
+```sh
+terraform -chdir=infra init -backend=false
+pnpm infra:fmt
+pnpm infra:validate
+```
+
+実際に配備するときは、`infra/terraform.tfvars.example`を`infra/terraform.tfvars`へコピーして設定する。
+サブドメイン名は公開情報なので`infra/production.auto.tfvars`でGit管理する。
+Terraform用の`CLOUDFLARE_API_TOKEN`はシェルかCIへ設定し、`.dev.vars`やWorkerへ渡さない。
+ローカルではGit管理外の`.env.cloudflare`にexport形式で保存し、`source .env.cloudflare`で読み込む。
+CloudflareのAPIトークン作成画面で「Start from scratch」からカスタム権限を設定する。
+現在の構成で必要な権限と対象範囲は次のとおり。
+
+| 設定 | 値 |
+| --- | --- |
+| Workersのロール | Admin |
+| スコープ | 使用するアカウントのWorkers product（Workers全体） |
+| Zoneの権限 | 不要（workers.devを使用） |
+
+[現行のWorkers権限体系](https://developers.cloudflare.com/workers/authorization/workers/)では、新規Workerの作成にはWorkers productスコープのAdminが必要。
+Editorは既存Workerの更新・配備・Secret管理に使えるが、新規作成や削除はできない。
+Workers ScriptsはLegacy権限であり、新規設定では新しいWorkersロールを使用する。
+D1とQueuesにも作成・編集権限が必要。Workersの権限だけではDBを作成できない。
+Wrangler用に`CLOUDFLARE_ACCOUNT_ID`もシェルかCIへ設定し、`infra/terraform.tfvars`の`account_id`と揃える。
+Terraformの`account_id`はtfvarsから渡すため、環境変数だけでは設定されない。
+
+最初はローカルstateなので、共同運用する前にリモートstateを設定する。
+
+```sh
+source .env.cloudflare
+terraform -chdir=infra plan -out=deploy.tfplan
+terraform -chdir=infra apply deploy.tfplan
+# 初回のアプリ配備をWorkers Buildsで実行してから、以下を登録する
+pnpm exec wrangler secret put LINE_CHANNEL_SECRET
+pnpm exec wrangler secret put LINE_CHANNEL_ACCESS_TOKEN
+pnpm exec wrangler secret put LINE_ALLOWED_USER_ID
+# グループID取得後
+pnpm exec wrangler secret put LINE_ALLOWED_GROUP_ID
+```
+
+秘密値は各コマンドの対話入力で登録する。
+Worker名を変更した場合は、wrangler.jsoncとTerraformのworker_nameを揃える。
+TerraformはコードとSecretを管理しないため、アプリ配備を巻き戻さない。
+初回アプリ配備後にはTerraform planを再実行し、意図しない設定差分がないことを確認する。
+
+## ログとトラブルシュート
+
+Workers LogsをTerraformとWranglerの両方で有効にし、配備後も設定が戻らないようにする。
+疎通確認中はサンプリング率1（100%）、invocation logsと永続化を有効にする。
+CloudflareのWorker画面のObservability → Logsで実行結果とアプリの構造化ログを確認する。
+Workers Buildsのビルドログと、Workerの実行時ログは別のもの。
+
+| event | 確認する内容 |
+| --- | --- |
+| `line_not_configured` | LINE Secret、アクセストークン、所有者ID、グループIDの設定 |
+| `invalid_signature` | Channel secretとWebhook送信元 |
+| `invalid_payload` | WebhookのJSON形式 |
+| `line_api_failed` | `upstreamStatus`。401ならアクセストークン、429ならレート制限など |
+| `line_transport_failed` | LINE APIへの接続失敗・タイムアウト |
+| `reply_failed` | 同じ実行のLINE API・通信エラー |
+| `internal_error` | ハンドラ内の予期しない例外 |
+
+アプリが記録するのは固定のevent名と上流HTTPステータスのみ。
+会話本文、user/group ID、署名、トークン、外部APIの応答本文、例外メッセージは出力しない。
+Cloudflareのinvocation logsにはURLなどの実行メタデータが含まれるため、URLに秘密値を渡さない。
+Tracesは今回有効にしない。
+
+## Workers Buildsでpush時に配備する
+
+CloudflareのWorker画面のConnect to Gitから`ikki0006/ai-family-assistant`を接続する。
+GitHub Appの初回認可では対象リポジトリだけを許可する。
+GitHub Actionsの配備workflowは使用しない。
+
+| 設定 | 値 |
+| --- | --- |
+| Production branch | `main` |
+| Root directory | リポジトリルート |
+| Build command | `pnpm install --frozen-lockfile && pnpm verify:app` |
+| Deploy command | `pnpm run deploy` |
+| 非本番ブランチの自動ビルド | 無効 |
+| Build variable: `NODE_VERSION` | `22.22.3`（`.node-version`にも記載） |
+| Build variable: `PNPM_VERSION` | `10.11.0` |
+| Build variable: `SKIP_DEPENDENCY_INSTALL` | `1` |
+
+Lint、型検査、テスト、ビルドが成功してから配備する。
+`verify:app`はTerraform不要で、ローカルの`verify`はTerraform書式検査も行う。
+ビルド時にTerraform applyやDBマイグレーションは実行しない。
+Buildの認証トークンはCloudflareの接続画面で設定し、LINEの秘密値は実行時のWorkers Secretsへ登録する。
+`.env.cloudflare`はGitやビルド環境にアップロードしない。
+コードをmainへpushした後、CloudflareのBuild履歴と`/health`応答を確認する。
+
+Cloudflare provider 5.26.0にはWorkers Builds接続用の専用リソースがないため、接続設定はこの手順で管理する。
+初回のGitHub App認可後は[Builds API](https://developers.cloudflare.com/workers/ci-cd/builds/api-reference/)で接続・トリガー・ビルド変数を管理できるが、Terraformによる自動管理は未実装。
+
+参考: [Workers Builds設定](https://developers.cloudflare.com/workers/ci-cd/builds/configuration/)、[ビルド環境のバージョン指定](https://developers.cloudflare.com/workers/ci-cd/builds/build-image/)。
+
+参考: [署名検証](https://developers.line.biz/en/docs/messaging-api/verify-webhook-signature/)、[メンション情報](https://developers.line.biz/en/docs/messaging-api/receiving-messages/#webhook-message-with-mention-to-bot)、[Workersのローカル環境変数](https://developers.cloudflare.com/workers/local-development/environment-variables/)。

@@ -147,3 +147,17 @@ vite.config.ts.timestamp-*
 
 # Turbo Repo
 .turbo
+
+# Local configuration and infrastructure state
+.dev.vars*
+!.dev.vars.example
+.wrangler/
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.tfvars
+*.tfvars.json
+!infra/production.auto.tfvars
+worker-configuration.d.ts
+.pnpm-store/

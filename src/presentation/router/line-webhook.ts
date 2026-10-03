@@ -1,9 +1,10 @@
 import { z } from "zod";
-import type { IncomingText } from "../../application/conversation/respond-to-ping";
+import type { IncomingText } from "../../application/conversation/respond-to-mention";
 
 const envelopeSchema = z.object({ events: z.array(z.unknown()).max(100) });
 const textEventSchema = z.object({
 	type: z.literal("message"),
+	webhookEventId: z.string().min(1).max(128).optional(),
 	mode: z.enum(["active", "standby"]).optional(),
 	replyToken: z.string().min(1),
 	source: z.object({
@@ -55,6 +56,7 @@ export function parseWebhook(body: string): IncomingText[] | null {
 		}
 		return [
 			{
+				...(value.webhookEventId ? { eventId: value.webhookEventId } : {}),
 				chatType: value.source.type,
 				groupId: value.source.groupId,
 				mentioned: mentions.length > 0,

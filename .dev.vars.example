@@ -5,3 +5,6 @@ LINE_CHANNEL_ACCESS_TOKEN=""
 # Find group_setup_required in Workers Logs and copy its groupId here.
 # Once set, only members of this group may send "@bot ping".
 LINE_ALLOWED_GROUP_ID=""
+
+# Sakana API key. Production: Worker runtime Secret, not a Build secret.
+FUGU_API_KEY=""

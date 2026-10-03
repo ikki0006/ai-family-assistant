@@ -1,12 +1,17 @@
-import { createRespondToPing } from "../application/conversation/respond-to-ping";
+import { createRespondToMention } from "../application/conversation/respond-to-mention";
 import { getHealth } from "../application/health/get-health";
 import type { ConfigurationIssue } from "../application/ports/diagnostics";
+import { createFuguTextGenerator } from "../infrastructure/ai/fugu-text-generator";
 import { createLineReplySender } from "../infrastructure/line/reply-sender";
 import { createSignatureVerifier } from "../infrastructure/line/verify-signature";
 import { diagnostics } from "../infrastructure/observability/diagnostics";
+import { createGenerationQueue } from "../infrastructure/queue/generation-queue";
 import { createRouter } from "../presentation/router/create-router";
 
 export interface Bindings {
+	JOBS_QUEUE?: Queue;
+	DB?: D1Database;
+	FUGU_API_KEY?: string;
 	LINE_CHANNEL_SECRET?: string;
 	LINE_CHANNEL_ACCESS_TOKEN?: string;
 	LINE_ALLOWED_GROUP_ID?: string;
@@ -29,7 +34,15 @@ export function createApp(env: Bindings = {}, fetcher: typeof fetch = fetch) {
 		line: {
 			verifySignature: createSignatureVerifier(secret),
 			respond: groupId
-				? createRespondToPing(createLineReplySender(token, fetcher, diagnostics), groupId)
+				? createRespondToMention(
+						createLineReplySender(token, fetcher, diagnostics),
+						groupId,
+						env.FUGU_API_KEY?.trim()
+							? createFuguTextGenerator(env.FUGU_API_KEY.trim(), fetcher, diagnostics)
+							: undefined,
+						diagnostics,
+						createGenerationQueue(env.JOBS_QUEUE),
+					)
 				: async (message) => {
 						if (
 							message.chatType === "group" &&

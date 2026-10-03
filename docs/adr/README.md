@@ -13,6 +13,8 @@
 | [0006](0006-line-connection-check.md) | メンションによるLINE疎通確認 | Accepted |
 | [0007](0007-manual-app-deployment.md) | Terraformと手動起動のアプリ配備を分離 | Superseded by 0008 |
 | [0008](0008-workers-builds-and-provisioned-resources.md) | Workers BuildsとDB・Queueの先行作成 | Accepted |
+| [0009](0009-group-only-access.md) | 家族グループ限定のアクセス | Accepted |
+| [0010](0010-stateless-fugu-replies.md) | Queue経由のFugu応答とReply/Push切替 | Accepted |
 
 新規の判断は[template.md](template.md)を使い、4桁の番号とkebab-caseの名前を付ける。
 状態はProposed、Accepted、Deprecated、Supersededから選ぶ。

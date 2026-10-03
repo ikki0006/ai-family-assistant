@@ -11,6 +11,9 @@ importers:
       hono:
         specifier: 4.12.14
         version: 4.12.14
+      openai:
+        specifier: 7.27.0
+        version: 7.27.0(undici@7.29.0)(ws@8.21.0)(zod@4.3.6)
       zod:
         specifier: 4.3.6
         version: 4.3.6
@@ -1276,6 +1279,30 @@ packages:
     resolution: {integrity: sha512-XrsrhT5sybtKI6wakr2SPOlGZWWYbUXZ7a0jT8/QOeAPau+1X/bSegNe5YR75oJmEZQbKningirmGOEJCIk61Q==}
     engines: {node: '>=12.20.0'}
 
+  openai@7.27.0:
+    resolution: {integrity: sha512-QDo1FvnRDZn15YwGVOhT9vpyypDiLphkd/7a4mcURWf5upMoEetgA6o4DJeII+ZZkC6m6DvlilCwii3+ynDcTw==}
+    engines: {node: '>=22.0.0'}
+    peerDependencies:
+      '@aws-sdk/credential-provider-node': '>=3.972.0 <4'
+      '@smithy/hash-node': '>=4.3.0 <5'
+      '@smithy/signature-v4': '>=5.4.0 <6'
+      undici: '>=5 <9'
+      ws: ^8.21.0
+      zod: ^3.25 || ^4.0
+    peerDependenciesMeta:
+      '@aws-sdk/credential-provider-node':
+        optional: true
+      '@smithy/hash-node':
+        optional: true
+      '@smithy/signature-v4':
+        optional: true
+      undici:
+        optional: true
+      ws:
+        optional: true
+      zod:
+        optional: true
+
   path-parse@1.0.7:
     resolution: {integrity: sha512-LDJzPVEEEPR+y48z93A0Ed0yXb8pAByGWo/k5YYdYgpY2/2EsOsksJrq7lOHxryrVOn1ejG6oAp8ahvOIQD8sw==}
 
@@ -2488,6 +2515,12 @@ snapshots:
   nanoid@3.3.19: {}
 
   obug@2.2.1: {}
+
+  openai@7.27.0(undici@7.29.0)(ws@8.21.0)(zod@4.3.6):
+    optionalDependencies:
+      undici: 7.29.0
+      ws: 8.21.0
+      zod: 4.3.6
 
   path-parse@1.0.7: {}
 

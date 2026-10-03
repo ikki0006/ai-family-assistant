@@ -17,5 +17,18 @@ resource "cloudflare_queue" "dead_letter" {
   queue_name = "${var.worker_name}-dlq"
 }
 
-# Consumer + DLQ routing will be added with the job handler.
-# No messages are published by the current ping/pong application.
+# Apply the consumer after deploying a Worker version that exports queue().
+
+resource "cloudflare_queue_consumer" "generation" {
+  account_id        = var.account_id
+  queue_id          = cloudflare_queue.jobs.id
+  type              = "worker"
+  script_name       = cloudflare_worker.bot.name
+  dead_letter_queue = cloudflare_queue.dead_letter.queue_name
+  settings = {
+    batch_size       = 1
+    max_wait_time_ms = 0
+    max_retries      = 0
+    max_concurrency  = 2
+  }
+}

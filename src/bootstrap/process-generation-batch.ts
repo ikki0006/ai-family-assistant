@@ -1,0 +1,47 @@
+import { createRespondToMention } from "../application/conversation/respond-to-mention";
+import { createFuguTextGenerator } from "../infrastructure/ai/fugu-text-generator";
+import { createLineAnswerSender } from "../infrastructure/line/answer-sender";
+import { diagnostics } from "../infrastructure/observability/diagnostics";
+import { createGenerationClaims } from "../infrastructure/persistence/d1/generation-claims";
+import { parseGenerationJob } from "../presentation/queue/generation-job";
+import type { Bindings } from "./create-app";
+
+export async function processGenerationBatch(
+	batch: MessageBatch<unknown>,
+	env: Bindings,
+	fetcher: typeof fetch = fetch,
+) {
+	for (const message of batch.messages) {
+		try {
+			const job = parseGenerationJob(message.body);
+			const now = Date.now();
+			if (
+				job.groupId !== env.LINE_ALLOWED_GROUP_ID?.trim() ||
+				now - job.receivedAt > 10 * 60_000 ||
+				job.receivedAt > now + 60_000
+			) {
+				message.ack();
+				continue;
+			}
+			const apiKey = env.FUGU_API_KEY?.trim();
+			const token = env.LINE_CHANNEL_ACCESS_TOKEN?.trim();
+			if (!apiKey || !token || !env.DB) throw new Error("Missing generation configuration");
+			if (!(await createGenerationClaims(env.DB).claim(job.eventId, now))) {
+				message.ack();
+				continue;
+			}
+			const respond = createRespondToMention(
+				createLineAnswerSender(token, job, fetcher, diagnostics),
+				job.groupId,
+				createFuguTextGenerator(apiKey, fetcher, diagnostics),
+				diagnostics,
+			);
+			await respond({ ...job, chatType: "group", mentioned: true });
+			message.ack();
+		} catch {
+			// Do not log the queued message or exception, both may contain personal data.
+			diagnostics.failure("generation_job_failed");
+			message.retry();
+		}
+	}
+}

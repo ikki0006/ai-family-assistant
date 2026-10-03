@@ -1,6 +1,6 @@
 import { createHmac } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createRespondToPing } from "../../src/application/conversation/respond-to-ping";
+import { createRespondToMention } from "../../src/application/conversation/respond-to-mention";
 import { createApp } from "../../src/bootstrap/create-app";
 import { createLineReplySender } from "../../src/infrastructure/line/reply-sender";
 import { createSignatureVerifier } from "../../src/infrastructure/line/verify-signature";
@@ -74,9 +74,18 @@ describe("signed LINE webhook", () => {
 		{ type: "follow" },
 	])("ignores an event that should not produce a reply", async (value) => {
 		const fetcher = vi.fn<typeof fetch>();
-		const response = await createApp(bindings, fetcher).request(
-			signedRequest(JSON.stringify({ events: [value] })),
-		);
+		const response = await createApp(
+			{
+				...bindings,
+				FUGU_API_KEY: "test-key",
+				JOBS_QUEUE: {
+					send: () => {
+						throw new Error("Unexpected enqueue");
+					},
+				} as unknown as Queue,
+			},
+			fetcher,
+		).request(signedRequest(JSON.stringify({ events: [value] })));
 		expect(response.status).toBe(200);
 		expect(fetcher).not.toHaveBeenCalled();
 	});
@@ -170,7 +179,7 @@ describe("group-only access", () => {
 
 	it("never replies with an empty allowlist", async () => {
 		const reply = vi.fn();
-		await createRespondToPing(
+		await createRespondToMention(
 			{ reply },
 			"",
 		)({ chatType: "group", groupId: group, mentioned: true, text: "ping", replyToken: "reply" });
@@ -215,4 +224,46 @@ describe("group-only access", () => {
 		expect(output).not.toHaveBeenCalled();
 		expect(fetcher).not.toHaveBeenCalled();
 	});
+});
+
+it("enqueues a signed mention without waiting for or calling Fugu", async () => {
+	const send = vi.fn().mockResolvedValue(undefined);
+	const fetcher = vi.fn<typeof fetch>();
+	const app = createApp(
+		{ ...bindings, FUGU_API_KEY: "test-key", JOBS_QUEUE: { send } as unknown as Queue },
+		fetcher,
+	);
+	const message = { ...event("@bot こんにちは", true), webhookEventId: "test-event" };
+	expect((await app.request(signedRequest(JSON.stringify({ events: [message] })))).status).toBe(
+		200,
+	);
+	expect(send).toHaveBeenCalledExactlyOnceWith({
+		eventId: "test-event",
+		groupId: group,
+		replyToken: "test-reply",
+		text: "こんにちは",
+		receivedAt: expect.any(Number),
+	});
+	expect(fetcher).not.toHaveBeenCalled();
+});
+
+it("fails the webhook if durable enqueue fails", async () => {
+	const send = vi.fn().mockRejectedValue(new Error("queue unavailable"));
+	const fetcher = vi.fn<typeof fetch>();
+	const app = createApp(
+		{ ...bindings, FUGU_API_KEY: "test-key", JOBS_QUEUE: { send } as unknown as Queue },
+		fetcher,
+	);
+	expect(
+		(
+			await app.request(
+				signedRequest(
+					JSON.stringify({
+						events: [{ ...event("@bot こんにちは", true), webhookEventId: "test-event" }],
+					}),
+				),
+			)
+		).status,
+	).toBe(502);
+	expect(fetcher).not.toHaveBeenCalled();
 });

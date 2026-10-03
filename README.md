@@ -1,8 +1,8 @@
 # AI Family Assistant
 
 家族のLINEグループで会話の記憶と通知を扱うアシスタント。
-現在は`GET /health`と、LINEの`@bot ping`に`pong`を返す疎通機能を実装している。
-DB、AI、記憶、定期通知は未実装。
+現在はヘルスチェック、`@bot ping`の疎通確認、許可した家族グループでのメンションに対するFuguの回答を実装している。
+会話の記憶と定期通知は未実装。D1は重複生成防止のイベントIDだけに使う。
 
 - [ディレクトリ構成と責務](docs/architecture.md)
 - [設計判断の一覧](docs/adr/README.md)
@@ -45,6 +45,39 @@ pnpm dev
 `LINE_ALLOWED_USER_ID`は不要。以前登録した場合は削除できる。
 ローカルのlocalhostへLINEから直接接続はできないため、実LINEの確認には公開したHTTPS URLが必要になる。
 
+## Fuguの設定と動作
+
+Workerの **Settings → Variables and Secrets（Build内ではない）** に、`FUGU_API_KEY`をSecretとして登録する。
+ローカルでは`.dev.vars`に設定する。キーはチャットやGitに貼らない。
+OpenAI TypeScript SDKのResponses APIを`https://api.sakana.ai/v1`へ接続し、モデルは通常の`fugu`に固定する。Ultraへの切り替えや自動フォールバックはしない。
+
+- `@bot 今日の晩ごはんの案を3つ教えて`のように、メンションと本文を送る。
+- 署名・許可グループ・メンションを検証してからQueueへ渡す。Queueへの保存完了後にWebhookへ200を返す。
+- Queue consumerで最大120秒生成する。入力は2,000 UTF-16コード単位、生成リクエストは最大800出力トークン、LINE表示は最大2,000 Unicodeコードポイントに制限する。
+- 受信から45秒未満で完成した場合はReply、以降はPushを使う。Replyの明確な400拒否もPushへ切り替えるが、通信失敗や500では二重送信を避けるため切り替えない。
+- PushはLINEの月間送信枠を受信人数分消費する。Replyは通数に含まれない。
+- 過去の会話は送らず、毎回そのメッセージだけで回答する。画像や添付ファイル、外部ツールは対象外。
+- APIキー未設定や生成失敗時には短い案内を返信する。`ping`はLLMを呼ばず動作する。
+- SDKの自動リトライとQueueの再試行は無効。同時consumer数は2。月額料金そのものの上限保証ではない。
+
+本文と回答はDBやアプリログへ保存しないが、処理待ちの本文・group ID・reply tokenはQueueに一時保持される。
+未処理の古いジョブは10分で処理対象外とする。失敗ジョブはDLQに入り、Queueの保持期間が終わるまで残るため、必要に応じて手動で破棄する。
+D1の重複防止IDは生成前に確保し、7日を超えた記録を次のジョブ処理時に削除する。
+処理中断や送信失敗後も同じイベントでは再生成しない。再実行は新しいメンションで行う。
+この設計では回答の確実な再送までは保証しない。Sakana側のデータ保持はサービス側の規約に従う。
+
+### 初回配備順序
+
+1. `pnpm exec wrangler d1 migrations apply DB --remote`で処理ID用テーブルを作る。
+2. mainへのpushで、`queue()`を持つWorkerをWorkers Buildsから配備する。
+3. Terraformのplan/applyでQueue consumerとDLQへの接続を作る。
+4. 実行時Secretに`FUGU_API_KEY`を登録し、家族グループからメンションで確認する。
+
+consumerはTerraformが管理し、Wranglerにはproducer bindingだけを置く。
+`pnpm dev`だけではconsumerを接続しないため、ローカルの生成・Queue処理は`pnpm test:workers`で検証する。
+
+参考: [Sakana API](https://console.sakana.ai/models)、[OpenAI SDK](https://developers.openai.com/api/docs/libraries)、[LINEの通数](https://developers.line.biz/ja/docs/messaging-api/pricing/)。
+
 ## 品質チェック
 
 | コマンド | 内容 |
@@ -68,7 +101,7 @@ Lefthookは設定済みだが、Gitフックへの登録には`pnpm hooks:instal
 CloudflareリソースはTerraform、アプリ配備はWorkers BuildsからWranglerで管理する。
 `infra/`にWorker、公開設定、D1、ジョブ用Queue、DLQを定義する。
 D1の`DB` bindingと通常Queueの`JOBS_QUEUE` producerをwrangler.jsoncに設定している。
-これらのbindingは次回アプリ配備で反映される。DBのテーブル、Queue consumerとDLQへの振り分け、Cronは処理実装時に追加する。
+bindingはアプリ配備で反映される。D1には生成イベントIDのテーブルを作り、Queue consumerとDLQ接続はTerraformで管理する。Cronは未実装。
 詳細は[ADR-0008](docs/adr/0008-workers-builds-and-provisioned-resources.md)を参照する。
 
 ```sh
@@ -132,6 +165,12 @@ Workers Buildsのビルドログと、Workerの実行時ログは別のもの。
 | `line_api_failed` | `upstreamStatus`。429ならレート制限など |
 | `line_transport_failed` | LINE APIへの接続失敗・タイムアウト |
 | `reply_failed` | 同じ実行のLINE API・通信エラー |
+| `llm_not_configured` | 実行時Secretの`FUGU_API_KEY` |
+| `llm_auth_failed` | Sakana APIキーの有効性・利用権限 |
+| `llm_api_failed` | `upstreamStatus`。429ならSakanaの利用制限など |
+| `llm_timeout` | 120秒以内に生成が完了しなかった |
+| `llm_empty_response` / `llm_generation_failed` | 空の回答・応答形式・接続失敗 |
+| `generation_job_failed` | D1テーブル、consumer設定、同じ実行のLINEエラーとDLQを確認 |
 | `internal_error` | ハンドラ内の予期しない例外 |
 
 通常は固定のevent名、設定不備の理由名、上流HTTPステータスのみを記録する。

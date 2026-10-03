@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
-import type { IncomingText } from "../../application/conversation/respond-to-ping";
+import type { IncomingText } from "../../application/conversation/respond-to-mention";
 import type { getHealth } from "../../application/health/get-health";
 import type { ConfigurationIssue, Diagnostics } from "../../application/ports/diagnostics";
 import { parseWebhook } from "./line-webhook";
@@ -44,7 +44,7 @@ export function createRouter(dependencies: RouterDependencies) {
 			dependencies.diagnostics?.failure("invalid_payload");
 			return context.json({ error: "invalid_payload" }, 400);
 		}
-		// Await replies so transport failures become non-2xx webhook responses.
+		// Await durable enqueue, not LLM generation, before acknowledging LINE.
 		const replies = await Promise.allSettled(messages.map((message) => line.respond(message)));
 		if (replies.some((reply) => reply.status === "rejected")) {
 			dependencies.diagnostics?.failure("reply_failed");

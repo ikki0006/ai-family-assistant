@@ -6,7 +6,14 @@ export type FailureCode =
 	| "line_api_failed"
 	| "line_auth_failed"
 	| "line_transport_failed"
-	| "internal_error";
+	| "internal_error"
+	| "generation_job_failed"
+	| "llm_not_configured"
+	| "llm_auth_failed"
+	| "llm_api_failed"
+	| "llm_generation_failed"
+	| "llm_empty_response"
+	| "llm_timeout";
 
 export type ConfigurationIssue =
 	| "missing_channel_secret"

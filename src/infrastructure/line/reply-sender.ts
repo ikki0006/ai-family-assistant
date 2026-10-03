@@ -29,7 +29,10 @@ export function createLineReplySender(
 			// Do not log provider response bodies, tokens, or conversations.
 			await response.body?.cancel();
 			if (!response.ok) {
-				diagnostics?.failure("line_api_failed", response.status);
+				diagnostics?.failure(
+					response.status === 401 ? "line_auth_failed" : "line_api_failed",
+					response.status,
+				);
 				throw new LineReplyError(response.status);
 			}
 		},

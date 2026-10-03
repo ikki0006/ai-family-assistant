@@ -1,9 +1,7 @@
 # Copy to .dev.vars and fill locally. Do not commit .dev.vars.
 LINE_CHANNEL_SECRET=""
 LINE_CHANNEL_ACCESS_TOKEN=""
-# LINE Developers > channel > Basic settings > Your user ID (U + 32 hex digits).
-# Setup owner: may send ping in 1:1 or mention the bot in a group.
-LINE_ALLOWED_USER_ID=""
-# Optional at first. Owner sends "@bot グループID" to retrieve the C-prefixed ID.
-# Once set, members of this group may send "@bot ping". Other groups are ignored.
+# When empty, no replies. Send a native bot mention: "@bot グループID".
+# Find group_setup_required in Workers Logs and copy its groupId here.
+# Once set, only members of this group may send "@bot ping".
 LINE_ALLOWED_GROUP_ID=""

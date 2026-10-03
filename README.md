@@ -23,8 +23,7 @@ pnpm dev
 以後のCIと再インストールには`pnpm install --frozen-lockfile`を使う。
 依存パッケージを取得できない環境では、設定ファイルの作成と全ツールの動作検証を区別する。
 
-`.dev.vars`にLINEのChannel secret、Channel access token、所有者のuser IDを設定する。
-所有者のuser IDはLINE Developersのチャネル基本設定にある「あなたのユーザーID」で確認する。
+`.dev.vars`にLINEのChannel secret、Channel access tokenを設定し、下記の初回手順で家族グループのIDを登録する。
 アプリは`.env`を併用せず、本番ではWorkers Secretsを使う。
 設定不足時はWebhookが503を返すが、ローカルURLの`/health`にはアクセスできる。
 架空のデータだけをテストに使い、実際の会話やAPIキーをfixtureに保存しない。
@@ -35,13 +34,15 @@ pnpm dev
 2. Workerを配備し、LINE設定のWebhook URLを`https://<worker>.<subdomain>.workers.dev/webhooks/line`にする。
 3. 下記の手順でWorkers Secretsを登録する。
 4. LINEのWebhook検証と利用を有効にし、定型の応答メッセージは無効にする。
-5. 所有者の1対1トークで`ping`、またはグループでbotを選んで`@bot ping`と送る。
-6. `pong`が返ることを確認する。
-7. 所有者が`@bot グループID`と送り、返されたIDを`LINE_ALLOWED_GROUP_ID`へ設定すると、そのグループの家族全員が呼びかけられる。
+5. 家族グループにbotを招待し、メンション候補からbotを選んで`@bot グループID`と送る。この段階では返信しない。
+6. WorkerのObservability → Logsで`group_setup_required`を探し、`groupId`を`LINE_ALLOWED_GROUP_ID`へ設定する。自動登録は行わない。
+7. 同じグループで`@bot ping`と送り、`pong`が返ることを確認する。家族の誰でも呼びかけられる。
 
 `@bot`は例示であり、LINEのメンション候補から実際のbotを選択する。
 同じ文字列を入力しただけの場合、他人宛てのメンション、全員宛てのメンションには反応しない。
-グループID未設定時の疎通は所有者だけに制限する。
+グループID未設定時は返信せず、署名検証済みの取得コマンドに限ってIDをログへ出す。
+設定後は指定グループだけに返信し、1対1・別グループ・roomでは反応しない。
+`LINE_ALLOWED_USER_ID`は不要。以前登録した場合は削除できる。
 ローカルのlocalhostへLINEから直接接続はできないため、実LINEの確認には公開したHTTPS URLが必要になる。
 
 ## 品質チェック
@@ -105,7 +106,6 @@ terraform -chdir=infra apply deploy.tfplan
 # 初回のアプリ配備をWorkers Buildsで実行してから、以下を登録する
 pnpm exec wrangler secret put LINE_CHANNEL_SECRET
 pnpm exec wrangler secret put LINE_CHANNEL_ACCESS_TOKEN
-pnpm exec wrangler secret put LINE_ALLOWED_USER_ID
 # グループID取得後
 pnpm exec wrangler secret put LINE_ALLOWED_GROUP_ID
 ```
@@ -124,16 +124,20 @@ Workers Buildsのビルドログと、Workerの実行時ログは別のもの。
 
 | event | 確認する内容 |
 | --- | --- |
-| `line_not_configured` | LINE Secret、アクセストークン、所有者ID、グループIDの設定 |
+| `line_not_configured` | `issues`: `missing_channel_secret` / `missing_access_token` / `invalid_group_id` |
+| `group_setup_required` | 初回取得した`groupId`を`LINE_ALLOWED_GROUP_ID`へ設定 |
 | `invalid_signature` | Channel secretとWebhook送信元 |
 | `invalid_payload` | WebhookのJSON形式 |
-| `line_api_failed` | `upstreamStatus`。401ならアクセストークン、429ならレート制限など |
+| `line_auth_failed` | LINE APIが401。アクセストークンの有効性・失効・チャネルの対応を確認 |
+| `line_api_failed` | `upstreamStatus`。429ならレート制限など |
 | `line_transport_failed` | LINE APIへの接続失敗・タイムアウト |
 | `reply_failed` | 同じ実行のLINE API・通信エラー |
 | `internal_error` | ハンドラ内の予期しない例外 |
 
-アプリが記録するのは固定のevent名と上流HTTPステータスのみ。
-会話本文、user/group ID、署名、トークン、外部APIの応答本文、例外メッセージは出力しない。
+通常は固定のevent名、設定不備の理由名、上流HTTPステータスのみを記録する。
+トークンの有効性はLINE APIの返信リクエスト時に判定される。Webhook検証だけでは確認できない。
+初回設定中だけ、明示的な取得コマンドに対してグループIDを記録する。設定後はIDを記録しない。
+会話本文、user ID、署名、トークン、外部APIの応答本文、例外メッセージは出力しない。
 Cloudflareのinvocation logsにはURLなどの実行メタデータが含まれるため、URLに秘密値を渡さない。
 Tracesは今回有効にしない。
 

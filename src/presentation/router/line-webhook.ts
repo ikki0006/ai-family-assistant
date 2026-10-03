@@ -8,7 +8,6 @@ const textEventSchema = z.object({
 	replyToken: z.string().min(1),
 	source: z.object({
 		type: z.enum(["user", "group", "room"]),
-		userId: z.string().min(1),
 		groupId: z.string().min(1).optional(),
 	}),
 	message: z.object({
@@ -56,7 +55,6 @@ export function parseWebhook(body: string): IncomingText[] | null {
 		}
 		return [
 			{
-				actorId: value.source.userId,
 				chatType: value.source.type,
 				groupId: value.source.groupId,
 				mentioned: mentions.length > 0,

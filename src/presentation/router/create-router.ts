@@ -2,12 +2,13 @@ import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import type { IncomingText } from "../../application/conversation/respond-to-ping";
 import type { getHealth } from "../../application/health/get-health";
-import type { Diagnostics } from "../../application/ports/diagnostics";
+import type { ConfigurationIssue, Diagnostics } from "../../application/ports/diagnostics";
 import { parseWebhook } from "./line-webhook";
 
 export interface RouterDependencies {
 	getHealth: typeof getHealth;
 	diagnostics?: Diagnostics;
+	configurationIssues?: ConfigurationIssue[];
 	line?: {
 		verifySignature(body: ArrayBuffer, signature: string): Promise<boolean>;
 		respond(message: IncomingText): Promise<void>;
@@ -21,7 +22,11 @@ export function createRouter(dependencies: RouterDependencies) {
 	router.post("/webhooks/line", async (context) => {
 		const line = dependencies.line;
 		if (!line) {
-			dependencies.diagnostics?.failure("line_not_configured");
+			dependencies.diagnostics?.failure(
+				"line_not_configured",
+				undefined,
+				dependencies.configurationIssues,
+			);
 			return context.json({ error: "line_not_configured" }, 503);
 		}
 		const signature = context.req.header("x-line-signature");

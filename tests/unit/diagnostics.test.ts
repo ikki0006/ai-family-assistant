@@ -25,7 +25,14 @@ it("reports missing LINE configuration without logging request data", async () =
 		body: "private conversation",
 	});
 	expect(response.status).toBe(503);
-	expect(output.mock.calls).toEqual([[JSON.stringify({ event: "line_not_configured" })]]);
+	expect(output.mock.calls).toEqual([
+		[
+			JSON.stringify({
+				event: "line_not_configured",
+				issues: ["missing_channel_secret", "missing_access_token"],
+			}),
+		],
+	]);
 });
 
 it("records LINE's status without exposing tokens, messages, or provider bodies", async () => {
@@ -37,7 +44,7 @@ it("records LINE's status without exposing tokens, messages, or provider bodies"
 	);
 	await expect(sender.reply("private-reply-token", "private conversation")).rejects.toThrow();
 	expect(output.mock.calls).toEqual([
-		[JSON.stringify({ event: "line_api_failed", upstreamStatus: 401 })],
+		[JSON.stringify({ event: "line_auth_failed", upstreamStatus: 401 })],
 	]);
 });
 
@@ -50,4 +57,30 @@ it("classifies transport errors without logging their messages", async () => {
 	);
 	await expect(sender.reply("reply", "text")).rejects.toThrow();
 	expect(output.mock.calls).toEqual([[JSON.stringify({ event: "line_transport_failed" })]]);
+});
+
+it.each([
+	[
+		{ LINE_CHANNEL_SECRET: "private-secret", LINE_CHANNEL_ACCESS_TOKEN: "  " },
+		["missing_access_token"],
+	],
+	[
+		{ LINE_CHANNEL_SECRET: "", LINE_CHANNEL_ACCESS_TOKEN: "private-token" },
+		["missing_channel_secret"],
+	],
+	[
+		{
+			LINE_CHANNEL_SECRET: "private-secret",
+			LINE_CHANNEL_ACCESS_TOKEN: "private-token",
+			LINE_ALLOWED_GROUP_ID: "private-invalid-group",
+		},
+		["invalid_group_id"],
+	],
+])("identifies configuration issues without exposing values", async (env, issues) => {
+	const output = vi.spyOn(console, "error").mockImplementation(() => {});
+	const app = createApp(env);
+	expect((await app.request("/health")).status).toBe(200);
+	expect(output).not.toHaveBeenCalled();
+	expect((await app.request("/webhooks/line", { method: "POST" })).status).toBe(503);
+	expect(output.mock.calls).toEqual([[JSON.stringify({ event: "line_not_configured", issues })]]);
 });

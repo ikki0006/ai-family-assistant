@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted (2026-10-04)
+Accepted (2026-10-04). Access control and setup amended by ADR-0009.
 
 ## Context
 

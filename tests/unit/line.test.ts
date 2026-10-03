@@ -1,16 +1,17 @@
 import { createHmac } from "node:crypto";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createRespondToPing } from "../../src/application/conversation/respond-to-ping";
 import { createApp } from "../../src/bootstrap/create-app";
 import { createLineReplySender } from "../../src/infrastructure/line/reply-sender";
 import { createSignatureVerifier } from "../../src/infrastructure/line/verify-signature";
+
+afterEach(() => vi.restoreAllMocks());
 
 const owner = `U${"1".repeat(32)}`;
 const group = `C${"2".repeat(32)}`;
 const bindings = {
 	LINE_CHANNEL_SECRET: "test-only-secret",
 	LINE_CHANNEL_ACCESS_TOKEN: "test-only-token",
-	LINE_ALLOWED_USER_ID: owner,
 	LINE_ALLOWED_GROUP_ID: group,
 };
 
@@ -68,6 +69,8 @@ describe("signed LINE webhook", () => {
 		event("@bot ping", false),
 		{ ...event("@bot ping", true), mode: "standby" },
 		{ ...event("@bot ping", true), source: { type: "group", groupId: "other", userId: owner } },
+		{ ...event("@bot ping", true), source: { type: "user" } },
+		{ ...event("@bot ping", true), source: { type: "room" } },
 		{ type: "follow" },
 	])("ignores an event that should not produce a reply", async (value) => {
 		const fetcher = vi.fn<typeof fetch>();
@@ -111,8 +114,12 @@ describe("signed LINE webhook", () => {
 		}
 	});
 
-	it("fails closed when the owner or token is missing", async () => {
-		for (const env of [{}, { ...bindings, LINE_ALLOWED_USER_ID: "" }]) {
+	it("fails closed when credentials are missing or the group ID is malformed", async () => {
+		for (const env of [
+			{},
+			{ ...bindings, LINE_CHANNEL_ACCESS_TOKEN: "" },
+			{ ...bindings, LINE_ALLOWED_GROUP_ID: "bad" },
+		]) {
 			expect((await createApp(env).request(signedRequest('{"events":[]}'))).status).toBe(503);
 			expect((await createApp(env).request("/health")).status).toBe(200);
 		}
@@ -147,38 +154,65 @@ describe("signed LINE webhook", () => {
 	});
 });
 
-describe("ping use case", () => {
-	it("allows group members only after a group has been configured", async () => {
-		const reply = vi.fn().mockResolvedValue(undefined);
-		const input = {
-			actorId: "family-member",
-			chatType: "group" as const,
-			groupId: group,
-			mentioned: true,
-			text: "ping",
-			replyToken: "reply",
-		};
-		await createRespondToPing({ reply }, owner)(input);
-		expect(reply).not.toHaveBeenCalled();
-		await createRespondToPing({ reply }, owner, group)(input);
-		expect(reply).toHaveBeenCalledWith("reply", "pong");
+describe("group-only access", () => {
+	it("allows a configured group's member without requiring a user ID", async () => {
+		const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response("{}"));
+		const value = { ...event("@bot ping", true), source: { type: "group", groupId: group } };
+		expect(
+			(
+				await createApp(bindings, fetcher).request(
+					signedRequest(JSON.stringify({ events: [value] })),
+				)
+			).status,
+		).toBe(200);
+		expect(fetcher).toHaveBeenCalledOnce();
 	});
 
-	it("limits group ID discovery to the owner and a real mention", async () => {
-		const reply = vi.fn().mockResolvedValue(undefined);
-		const respond = createRespondToPing({ reply }, owner);
-		const input = {
-			actorId: owner,
-			chatType: "group" as const,
-			groupId: group,
-			mentioned: true,
-			text: "グループID",
-			replyToken: "reply",
-		};
-		await respond({ ...input, mentioned: false });
-		await respond({ ...input, actorId: "stranger" });
+	it("never replies with an empty allowlist", async () => {
+		const reply = vi.fn();
+		await createRespondToPing(
+			{ reply },
+			"",
+		)({ chatType: "group", groupId: group, mentioned: true, text: "ping", replyToken: "reply" });
 		expect(reply).not.toHaveBeenCalled();
-		await respond(input);
-		expect(reply).toHaveBeenCalledWith("reply", `グループID: ${group}`);
+	});
+
+	it("logs only the group ID for a signed setup command and never replies in setup mode", async () => {
+		const output = vi.spyOn(console, "info").mockImplementation(() => {});
+		const fetcher = vi.fn<typeof fetch>();
+		const app = createApp({ ...bindings, LINE_ALLOWED_GROUP_ID: "" }, fetcher);
+		const values = [
+			event("@bot ping", true),
+			event("グループID"),
+			event("@bot グループID", false),
+			{ ...event("@bot グループID", true), source: { type: "user" } },
+			{
+				...event("@bot グループID", true),
+				source: { type: "group", groupId: "private-invalid-value" },
+			},
+		];
+		for (const value of values) {
+			expect((await app.request(signedRequest(JSON.stringify({ events: [value] })))).status).toBe(
+				200,
+			);
+		}
+		expect(output).not.toHaveBeenCalled();
+		expect((await app.request(signedRequest('{"events":[]}'))).status).toBe(200);
+		await app.request(signedRequest(JSON.stringify({ events: [event("@bot グループID", true)] })));
+		expect(output.mock.calls).toEqual([
+			[JSON.stringify({ event: "group_setup_required", groupId: group })],
+		]);
+		expect(fetcher).not.toHaveBeenCalled();
+	});
+
+	it("never logs a setup ID before signature verification or after group configuration", async () => {
+		const output = vi.spyOn(console, "info").mockImplementation(() => {});
+		const fetcher = vi.fn<typeof fetch>();
+		const body = JSON.stringify({ events: [event("@bot グループID", true)] });
+		const setup = createApp({ ...bindings, LINE_ALLOWED_GROUP_ID: "" }, fetcher);
+		expect((await setup.request("/webhooks/line", { method: "POST", body })).status).toBe(401);
+		await createApp(bindings, fetcher).request(signedRequest(body));
+		expect(output).not.toHaveBeenCalled();
+		expect(fetcher).not.toHaveBeenCalled();
 	});
 });

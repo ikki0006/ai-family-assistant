@@ -1,5 +1,7 @@
 # 2026-10-04 承認付き自己改善の配備
 
+この記録は配備当時の状態。現在の実装・未確認事項は[残タスク](../remaining-tasks.md)を参照する。
+
 ## 結果
 
 - Worker: `fbc51d37-ff57-49c0-afa8-9beae347a66d`。healthはHTTP 200。
@@ -12,7 +14,7 @@
 ## 実機試験
 
 [成功した実行](https://github.com/ikki0006/ai-family-assistant/actions/runs/37206279586)でGemini生成、全検証、Draft PR作成が完了。
-[Draft PR #1](https://github.com/ikki0006/ai-family-assistant/pull/1)は秘書プロンプトに日本時間の明記を求める1行だけを追加。未マージ。
+[Draft PR #1](https://github.com/ikki0006/ai-family-assistant/pull/1)は秘書プロンプトに日本時間の明記を求める1行だけを追加。試験時点では未マージ（後に`0f79168`でmainへ反映）。
 ローカルの`pnpm verify`も145テスト・型・lint・ビルド・Terraform書式を通過した。
 LINEからの要望・承認メッセージ送信は未実施。承認処理自体は単体・D1統合テストで確認済み。
 

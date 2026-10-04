@@ -14,22 +14,19 @@ export function createWorkersAiTextGenerator(
 	ai: Pick<Ai, "run">,
 	gatewayId: string,
 	diagnostics?: Diagnostics,
+	timeoutMs = 120_000,
 ): TextGenerator {
 	if (!gatewayId.trim()) throw new Error("Missing AI Gateway configuration");
 	return {
-		async generate(text) {
-			const signal = AbortSignal.timeout(120_000);
+		async generate(input) {
+			const signal = AbortSignal.timeout(timeoutMs);
 			try {
 				const response = await ai.run(
 					WORKERS_AI_MODEL,
 					{
 						messages: [
-							{
-								role: "system",
-								content:
-									"あなたは家族用のアシスタントです。日本語で簡潔に答えてください。過去の会話や記憶にはアクセスできません。実行していない操作や保存を完了したとは言わないでください。 /no_think",
-							},
-							{ role: "user", content: text },
+							{ role: "system", content: `${input.system}\n/no_think` },
+							...input.messages,
 						],
 						max_tokens: 800,
 						stream: false,
@@ -41,7 +38,7 @@ export function createWorkersAiTextGenerator(
 							id: gatewayId,
 							skipCache: true,
 							collectLog: false,
-							requestTimeoutMs: 120_000,
+							requestTimeoutMs: timeoutMs,
 						},
 					},
 				);

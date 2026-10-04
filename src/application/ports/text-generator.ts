@@ -1,5 +1,7 @@
+import type { GenerationInput } from "../conversation/conversation";
+
 export interface TextGenerator {
-	generate(text: string): Promise<string>;
+	generate(input: GenerationInput): Promise<string>;
 }
 
 export class AiUsageLimitError extends Error {

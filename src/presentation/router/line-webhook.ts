@@ -5,14 +5,17 @@ const envelopeSchema = z.object({ events: z.array(z.unknown()).max(100) });
 const textEventSchema = z.object({
 	type: z.literal("message"),
 	webhookEventId: z.string().min(1).max(128).optional(),
+	timestamp: z.number().int().nonnegative().optional(),
 	mode: z.enum(["active", "standby"]).optional(),
 	replyToken: z.string().min(1),
 	source: z.object({
 		type: z.enum(["user", "group", "room"]),
 		groupId: z.string().min(1).optional(),
+		userId: z.string().optional(),
 	}),
 	message: z.object({
 		type: z.literal("text"),
+		id: z.string().min(1).optional(),
 		text: z.string().max(5000),
 		mention: z
 			.object({
@@ -38,7 +41,30 @@ export function parseWebhook(body: string): IncomingText[] | null {
 	}
 	const envelope = envelopeSchema.safeParse(parsed);
 	if (!envelope.success) return null;
-	return envelope.data.events.flatMap((event) => {
+	return envelope.data.events.flatMap<IncomingText>((event) => {
+		const unsend = z
+			.object({
+				type: z.literal("unsend"),
+				webhookEventId: z.string(),
+				timestamp: z.number(),
+				source: z.object({ type: z.literal("group"), groupId: z.string() }),
+				unsend: z.object({ messageId: z.string() }),
+			})
+			.safeParse(event);
+		if (unsend.success)
+			return [
+				{
+					eventId: unsend.data.webhookEventId,
+					messageId: unsend.data.unsend.messageId,
+					occurredAt: unsend.data.timestamp,
+					chatType: "group" as const,
+					groupId: unsend.data.source.groupId,
+					mentioned: false,
+					text: "",
+					replyToken: "",
+					unsend: true,
+				},
+			];
 		const result = textEventSchema.safeParse(event);
 		// Non-text, future event types, and standby events require no reply.
 		if (!result.success || result.data.mode === "standby") return [];
@@ -57,6 +83,9 @@ export function parseWebhook(body: string): IncomingText[] | null {
 		return [
 			{
 				...(value.webhookEventId ? { eventId: value.webhookEventId } : {}),
+				...(value.message.id ? { messageId: value.message.id } : {}),
+				...(value.source.userId ? { speaker: value.source.userId } : {}),
+				...(value.timestamp !== undefined ? { occurredAt: value.timestamp } : {}),
 				chatType: value.source.type,
 				groupId: value.source.groupId,
 				mentioned: mentions.length > 0,

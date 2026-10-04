@@ -16,14 +16,13 @@ export function createFuguTextGenerator(
 		logLevel: "off",
 	});
 	return {
-		async generate(text) {
+		async generate(input) {
 			try {
 				const response = await client.responses.create(
 					{
 						model: "fugu",
-						instructions:
-							"あなたは家族用のアシスタントです。日本語で簡潔に答えてください。過去の会話や記憶にはアクセスできません。実行していない操作や保存を完了したとは言わないでください。",
-						input: text,
+						instructions: input.system,
+						input: input.messages,
 						max_output_tokens: 800,
 					},
 					{ signal: AbortSignal.timeout(120_000) },

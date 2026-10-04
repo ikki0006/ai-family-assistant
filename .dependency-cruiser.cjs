@@ -2,7 +2,12 @@
 module.exports = {
 	forbidden: [
 		{ name: "no-circular", severity: "error", from: {}, to: { circular: true } },
-		{ name: "no-unresolved", severity: "error", from: {}, to: { couldNotResolve: true } },
+		{
+			name: "no-unresolved",
+			severity: "error",
+			from: {},
+			to: { couldNotResolve: true, pathNot: "^cloudflare:workers$" },
+		},
 		{
 			name: "application-depends-on-core-only",
 			severity: "error",
@@ -25,7 +30,7 @@ module.exports = {
 			name: "ports-do-not-depend-on-use-cases",
 			severity: "error",
 			from: { path: "^src/application/ports/" },
-			to: { path: "^src/application/(?!ports/)" },
+			to: { path: "^src/application/(?!ports/|conversation/conversation\\.ts$)" },
 		},
 		{
 			name: "presentation-does-not-construct-adapters",
@@ -37,7 +42,9 @@ module.exports = {
 			name: "infrastructure-implements-ports",
 			severity: "error",
 			from: { path: "^src/infrastructure/" },
-			to: { path: "^src/(presentation|bootstrap)/|^src/application/(?!ports/)" },
+			to: {
+				path: "^src/(presentation|bootstrap)/|^src/application/(?!ports/|conversation/conversation\\.ts$)",
+			},
 		},
 		{
 			name: "entrypoint-is-not-importable",

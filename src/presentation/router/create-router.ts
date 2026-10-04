@@ -46,7 +46,15 @@ export function createRouter(dependencies: RouterDependencies) {
 			return context.json({ error: "invalid_payload" }, 400);
 		}
 		// Await durable enqueue, not LLM generation, before acknowledging LINE.
-		const replies = await Promise.allSettled(messages.map((message) => line.respond(message)));
+		const replies: PromiseSettledResult<void>[] = [];
+		for (const message of messages) {
+			try {
+				await line.respond(message);
+				replies.push({ status: "fulfilled", value: undefined });
+			} catch (reason) {
+				replies.push({ status: "rejected", reason });
+			}
+		}
 		if (replies.some((reply) => reply.status === "rejected")) {
 			dependencies.diagnostics?.failure("reply_failed");
 			return context.json({ error: "reply_failed" }, 502);

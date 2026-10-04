@@ -19,7 +19,8 @@
 
 ## 記憶
 
-- [ ] Cloudflare Agents Sessionsによる短期履歴とコンテキスト圧縮を実装する。
+- [x] Cloudflare Agents Sessionsによる短期履歴・必要時の要約・削除を実装。
+- [ ] 本番配備後、通常発言の記憶とメンション回答・履歴リセットをLINEで確認する。
 - [ ] 長期記憶への抽出、更新、削除の仕様を決めて実装する。
 
-AI Gatewayの予算設定は作成済み。現在の推論先はWorkers AIのQwenで、Gateway経由の実API応答を確認済み。AI bindingからLINEへの一連の本番確認は別途必要。Geminiへの切り替えはCredits購入エラー解消後に行う。
+AI Gatewayの予算設定は作成済み。現在の推論先はWorkers AIのQwenで、Gateway経由の実API応答を確認済み。記憶導入前のAI bindingからLINEへの応答はユーザー確認済み。Geminiへの切り替えはCredits購入エラー解消後に行う。

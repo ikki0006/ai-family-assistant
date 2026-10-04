@@ -1,3 +1,4 @@
+export { FamilyConversationAgent } from "./bootstrap/family-conversation-agent";
 import { createApp } from "./bootstrap/create-app";
 import type { Bindings } from "./bootstrap/create-app";
 import { processGenerationBatch } from "./bootstrap/process-generation-batch";

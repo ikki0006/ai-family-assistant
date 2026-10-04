@@ -1,8 +1,8 @@
 # アーキテクチャ
 
 application、infrastructure、presentation、bootstrapからなる単一のCloudflare Worker。
-現在の機能はヘルスチェック、LINE疎通確認、記憶を持たないWorkers AIへの質問と回答。
-記憶はまだ実装していない。定期通知はCronとD1の設定で処理する。
+現在の機能はヘルスチェック、LINE疎通確認、短期会話を踏まえたWorkers AIへの質問と回答。
+会話はグループ別DOのSessionsで7日間保存する。定期通知はCronとD1の設定で処理する。
 TerraformでD1、ジョブ用Queue、DLQを先に定義し、アプリ配備はWorkers Buildsを使う。
 Queue consumerとDLQはTerraformで接続する。AI Gatewayの予算制限とCronもTerraformが管理する。
 
@@ -13,12 +13,14 @@ src/
 │   ├── ports/                 ReplySender、TextGenerator、GenerationQueueなど外部依存の契約
 │   ├── health/                ヘルスチェック
 │   ├── conversation/          許可判定、ジョブ投入、生成結果の返信
-│   ├── memory/                後続の記憶処理
+│   ├── prompts/               秘書・要約のデフォルト指示
+│   ├── memory/                必要時の会話要約
 │   ├── reminder/              収集日の判定とPush通知
 │   └── privacy/               後続の個人情報処理
 ├── infrastructure/
 │   ├── line/                  署名検証とLINE APIへの返信
 │   ├── persistence/d1/        生成・通知の重複防止と収集設定
+│   ├── memory/                Sessionsと削除・保持期限のRepository
 │   ├── ai/                  AI bindingとGateway経由の接続
 │   ├── privacy/
 │   └── queue/
@@ -62,9 +64,9 @@ coreは他層や外部パッケージに依存しない。将来domainを設け�
 6. 短い生成はReply、受信後45秒以降はPushで回答を送る。
 
 通常の発言と、他の人へのメンションには返信しない。
-将来の会話保存は、返信判定より前の独立した処理として追加する。
-現段階では許可グループのメンション本文だけをWorkers AIへ送る。
-本文と回答を記憶として保存しない。QueueとDLQには配送中の本文が一時保持される。
+会話保存は返信判定より前に実行する。通常発言には返信しない。
+許可グループの直近履歴と要約をWorkers AIへ送る。
+本文と送信済み回答をDOへ保存する。QueueとDLQには本文を含めず、会話IDと世代番号を保持する。
 
 ## 判断の記録
 

@@ -19,6 +19,8 @@
 | [0012](0012-workers-ai-budget.md) | Workers AIとGatewayによる予算制限 | Accepted |
 | [0013](0013-shared-core.md) | 層に依存しない共通定義の配置 | Accepted |
 
+| [0014](0014-conversation-sessions.md) | Sessionsによる短期会話・要約・削除 | Accepted |
+
 新規の判断は[template.md](template.md)を使い、4桁の番号とkebab-caseの名前を付ける。
 状態はProposed、Accepted、Deprecated、Supersededから選ぶ。
 判断を覆す場合は新しいADRを追加し、旧ADRから参照する。

@@ -3,9 +3,16 @@ import type { GenerationQueue } from "../ports/generation-queue";
 import type { ReplySender } from "../ports/reply-sender";
 import type { TextGenerator } from "../ports/text-generator";
 import { AiUsageLimitError } from "../ports/text-generator";
+import { secretaryPrompt } from "../prompts/secretary";
+import type { MemoryReference } from "./conversation";
 
 export interface IncomingText {
 	eventId?: string;
+	messageId?: string;
+	speaker?: string;
+	occurredAt?: number;
+	memory?: MemoryReference;
+	unsend?: boolean;
 	chatType: "user" | "group" | "room";
 	groupId: string | undefined;
 	mentioned: boolean;
@@ -53,7 +60,8 @@ export function createRespondToMention(
 			await jobs.enqueue({
 				eventId: message.eventId,
 				groupId: allowedGroupId,
-				text,
+				text: message.memory ? "" : text,
+				...(message.memory ? { memory: message.memory } : {}),
 				replyToken: message.replyToken,
 				receivedAt: now(),
 			});
@@ -61,7 +69,12 @@ export function createRespondToMention(
 		}
 		let answer: string;
 		try {
-			answer = (await generator.generate(text)).trim();
+			answer = (
+				await generator.generate({
+					system: secretaryPrompt(now(), false),
+					messages: [{ role: "user", content: text }],
+				})
+			).trim();
 			if (!answer) throw new Error("Empty model response");
 		} catch (error) {
 			await sender.reply(

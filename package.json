@@ -5,7 +5,7 @@
 	"type": "module",
 	"packageManager": "pnpm@10.11.0",
 	"engines": {
-		"node": ">=22.17.0 <23",
+		"node": ">=22.22.3 <23",
 		"pnpm": "10.11.0"
 	},
 	"scripts": {
@@ -31,6 +31,7 @@
 		"infra:validate": "terraform -chdir=infra validate"
 	},
 	"dependencies": {
+		"agents": "0.26.0",
 		"hono": "4.12.14",
 		"openai": "7.27.0",
 		"zod": "4.3.6"

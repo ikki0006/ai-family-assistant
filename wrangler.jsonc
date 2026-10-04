@@ -7,6 +7,10 @@
 	"compatibility_date": "2026-04-17",
 	"compatibility_flags": ["nodejs_compat"],
 	"ai": { "binding": "AI" },
+	"durable_objects": {
+		"bindings": [{ "name": "CONVERSATIONS", "class_name": "FamilyConversationAgent" }]
+	},
+	"migrations": [{ "tag": "v1-conversations", "new_sqlite_classes": ["FamilyConversationAgent"] }],
 	"vars": { "AI_GATEWAY_ID": "ai-family-assistant" },
 	"observability": {
 		"enabled": true,

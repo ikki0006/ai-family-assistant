@@ -27,7 +27,10 @@ it("sends only the current trimmed text to the model", async () => {
 	const reply = vi.fn();
 	const generate = vi.fn().mockResolvedValue("  カレーはいかがですか？  ");
 	await createRespondToMention({ reply }, "family", { generate })(incoming);
-	expect(generate).toHaveBeenCalledExactlyOnceWith("今日のおすすめ料理は？");
+	expect(generate).toHaveBeenCalledExactlyOnceWith({
+		system: expect.any(String),
+		messages: [{ role: "user", content: "今日のおすすめ料理は？" }],
+	});
 	expect(reply).toHaveBeenCalledExactlyOnceWith("reply", "カレーはいかがですか？");
 });
 

@@ -31,6 +31,12 @@ export async function processGenerationBatch(
 				message.ack();
 				continue;
 			}
+			if (env.CONVERSATIONS) {
+				if (job.memory)
+					await env.CONVERSATIONS.get(env.CONVERSATIONS.idFromName(job.groupId)).answer(job);
+				message.ack();
+				continue;
+			}
 			const respond = createRespondToMention(
 				createLineAnswerSender(token, job, fetcher, diagnostics),
 				job.groupId,

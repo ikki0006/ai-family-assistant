@@ -1,5 +1,7 @@
 import { createRespondToMention } from "../application/conversation/respond-to-mention";
+import type { IncomingText } from "../application/conversation/respond-to-mention";
 import { getHealth } from "../application/health/get-health";
+import type { GenerationJob } from "../application/ports/generation-queue";
 import type { ConfigurationIssue } from "../core/diagnostics";
 import { createWorkersAiTextGenerator } from "../infrastructure/ai/workers-ai-text-generator";
 import { createLineReplySender } from "../infrastructure/line/reply-sender";
@@ -10,6 +12,13 @@ import { createRouter } from "../presentation/router/create-router";
 
 export interface Bindings {
 	JOBS_QUEUE?: Queue;
+	CONVERSATIONS?: {
+		idFromName(name: string): DurableObjectId;
+		get(id: DurableObjectId): {
+			receive(message: IncomingText): Promise<void>;
+			answer(job: GenerationJob): Promise<void>;
+		};
+	};
 	DB?: D1Database;
 	AI?: Pick<Ai, "run">;
 	AI_GATEWAY_ID?: string;
@@ -19,6 +28,7 @@ export interface Bindings {
 }
 
 export function createApp(env: Bindings = {}, fetcher: typeof fetch = fetch) {
+	const conversations = env.CONVERSATIONS;
 	const secret = env.LINE_CHANNEL_SECRET?.trim();
 	const token = env.LINE_CHANNEL_ACCESS_TOKEN?.trim();
 	const groupId = env.LINE_ALLOWED_GROUP_ID?.trim() || undefined;
@@ -35,15 +45,20 @@ export function createApp(env: Bindings = {}, fetcher: typeof fetch = fetch) {
 		line: {
 			verifySignature: createSignatureVerifier(secret),
 			respond: groupId
-				? createRespondToMention(
-						createLineReplySender(token, fetcher, diagnostics),
-						groupId,
-						env.AI && env.AI_GATEWAY_ID?.trim()
-							? createWorkersAiTextGenerator(env.AI, env.AI_GATEWAY_ID.trim(), diagnostics)
-							: undefined,
-						diagnostics,
-						createGenerationQueue(env.JOBS_QUEUE),
-					)
+				? conversations
+					? async (message) => {
+							if (message.chatType === "group" && message.groupId === groupId)
+								await conversations.get(conversations.idFromName(groupId)).receive(message);
+						}
+					: createRespondToMention(
+							createLineReplySender(token, fetcher, diagnostics),
+							groupId,
+							env.AI && env.AI_GATEWAY_ID?.trim()
+								? createWorkersAiTextGenerator(env.AI, env.AI_GATEWAY_ID.trim(), diagnostics)
+								: undefined,
+							diagnostics,
+							createGenerationQueue(env.JOBS_QUEUE),
+						)
 				: async (message) => {
 						if (
 							message.chatType === "group" &&

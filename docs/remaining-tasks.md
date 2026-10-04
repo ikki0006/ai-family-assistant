@@ -45,7 +45,9 @@ AI Gatewayの予算は31日40 USD・24時間2 USD。Geminiの料金はGoogle側�
 ## 自己改善（Geminiによる小規模試行）
 
 - [x] プロンプト・単体テスト限定の生成をFuguからGemini/Gatewayへ変更。生成・検証・PR公開ジョブを分離。
-- [ ] Actions Secret `CF_IMPROVEMENT_GATEWAY_TOKEN`（専用AI Gateway Run）とvariable `CLOUDFLARE_ACCOUNT_ID`を設定。
-- [ ] GitHub ActionsによるPR作成許可、main保護、Worker Secret `GH_IMPROVEMENT_TOKEN`を確認。
-- [ ] migration 0004、Workflowをmainへ反映し、Workerを配備。
-- [ ] 承認した架空の改善依頼で生成→検証→Draft PRを実機確認。
+- [x] Actions Secret `CF_IMPROVEMENT_GATEWAY_TOKEN`（専用AI Gateway Run）とvariable `CLOUDFLARE_ACCOUNT_ID`を設定。
+- [x] GitHub ActionsによるPR作成を許可し、Worker Secret `GH_IMPROVEMENT_TOKEN`を登録。同じトークンで実dispatch成功。
+- [ ] mainのブランチ保護を設定（現在は未設定）。Workflow自体は改善ブランチへのpushとDraft PR作成のみ。
+- [x] migration 0004とWorkflowを反映、Worker `fbc51d37-ff57-49c0-afa8-9beae347a66d`を配備。health 200。
+- [x] 専用トークンの実dispatch→Gemini生成→全検証→[Draft PR #1](https://github.com/ikki0006/ai-family-assistant/pull/1)作成成功。
+- [ ] LINEから実際に要望・承認を送る操作を確認する（試験でLINEメッセージは送信していない）。

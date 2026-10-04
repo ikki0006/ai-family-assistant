@@ -13,7 +13,7 @@ Acceptedは設計の採用を示し、本番配備の完了は意味しない。
 | AIと検索 | [0016: GeminiとBYOK](0016-gemini-flash.md) | [0012: 予算](0012-workers-ai-budget.md)、[0017: Tavily](0017-tavily-search.md) |
 | 会話・記憶・削除 | [0019: 非同期整理と長期記憶](0019-background-memory.md) | [0014: Sessions](0014-conversation-sessions.md)、[0004: 個人情報の境界](0004-memory-and-privacy-boundaries.md) |
 | 定期通知 | [0015: LINEからの通知管理](0015-line-reminders.md) | [0011: ゴミ出し](0011-garbage-reminders.md) |
-| 自己改善（未配備） | [0018: 承認からDraft PR](0018-approved-improvements.md) | 既存Geminiで小さな修正から試行 |
+| 自己改善 | [0018: 承認からDraft PR](0018-approved-improvements.md) | 既存Geminiで小さな修正から試行 |
 
 ## 判断の履歴
 
@@ -38,7 +38,7 @@ Acceptedは設計の採用を示し、本番配備の完了は意味しない。
 | [0015](0015-line-reminders.md) | LINE通知管理と5分Cron | 採用 |
 | [0016](0016-gemini-flash.md) | GeminiをBYOKで呼ぶ | 採用 |
 | [0017](0017-tavily-search.md) | 必要時だけTavily検索 | 採用 |
-| [0018](0018-approved-improvements.md) | 承認した改善をDraft PRにする | 未配備。Gemini・専用Gatewayトークンを採用 |
+| [0018](0018-approved-improvements.md) | 承認した改善をDraft PRにする | 採用。Gemini・専用Gatewayトークン |
 | [0019](0019-background-memory.md) | 非同期整理・長期記憶・一覧 | 採用 |
 
 ## 書き方

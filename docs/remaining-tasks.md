@@ -14,7 +14,7 @@
 
 - [x] `pnpm verify`成功。単体74件、Workers統合9件、型・依存検査・ビルドを確認。
 - [x] 本番D1へマイグレーションと収集設定を反映。住所・実際の収集設定はGitに保存しない。
-- [ ] scheduled handlerを含むアプリをデプロイした後、TerraformでCronを有効化する。
+- [x] `048dc83`をWorkers Buildsで本番配備し、TerraformでCronを有効化。
 - [ ] 前日23時・当日8時の通知を確認する。
 
 ## 記憶

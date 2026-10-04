@@ -10,7 +10,14 @@ const bindings = {
 	DB: db,
 	LINE_ALLOWED_GROUP_ID: group,
 	LINE_CHANNEL_ACCESS_TOKEN: "test-token",
-	FUGU_API_KEY: "test-key",
+	AI_GATEWAY_ID: "test-gateway",
+	AI: {
+		run: vi
+			.fn()
+			.mockImplementation(async () =>
+				Response.json({ choices: [{ message: { content: "こんにちは！" } }] }),
+			),
+	} as unknown as Ai,
 };
 
 beforeAll(async () => {
@@ -18,6 +25,7 @@ beforeAll(async () => {
 });
 beforeEach(async () => {
 	await db.prepare("DELETE FROM generation_claims").run();
+	vi.mocked(bindings.AI.run).mockClear();
 });
 
 function batch(groupId = group, receivedAt = Date.now()) {
@@ -44,32 +52,17 @@ function batch(groupId = group, receivedAt = Date.now()) {
 	};
 }
 function transport() {
-	return vi.fn<typeof fetch>().mockImplementation(async (url) => {
-		if (String(url).startsWith("https://api.sakana.ai/"))
-			return Response.json({
-				id: "resp_test",
-				object: "response",
-				status: "completed",
-				output: [
-					{
-						type: "message",
-						role: "assistant",
-						content: [{ type: "output_text", text: "こんにちは！", annotations: [] }],
-					},
-				],
-			});
-		return Response.json({});
-	});
+	return vi.fn<typeof fetch>().mockImplementation(async () => Response.json({}));
 }
 
-it("generates with the real SDK and D1 deduplication, then replies once", async () => {
+it("generates with Workers AI and D1 deduplication, then replies once", async () => {
 	const fetcher = transport();
 	const first = batch();
 	await processGenerationBatch(first, bindings, fetcher);
 	await processGenerationBatch(batch(), bindings, fetcher);
 	expect(first.messages[0]?.ack).toHaveBeenCalledOnce();
+	expect(bindings.AI.run).toHaveBeenCalledOnce();
 	expect(fetcher.mock.calls.map(([url]) => String(url))).toEqual([
-		"https://api.sakana.ai/v1/responses",
 		"https://api.line.me/v2/bot/message/reply",
 	]);
 	const rows = await db.prepare("SELECT * FROM generation_claims").all();
@@ -97,21 +90,15 @@ it("rechecks authorization and drops stale jobs before model calls", async () =>
 it("uses Push for delayed jobs", async () => {
 	const fetcher = transport();
 	await processGenerationBatch(batch(group, Date.now() - 60_000), bindings, fetcher);
-	expect(fetcher.mock.calls[1]?.[0]).toBe("https://api.line.me/v2/bot/message/push");
+	expect(fetcher.mock.calls[0]?.[0]).toBe("https://api.line.me/v2/bot/message/push");
 });
 
 it("sends a failed delivery toward the DLQ and never regenerates that event", async () => {
 	const fetcher = transport();
-	fetcher
-		.mockResolvedValueOnce(
-			Response.json({
-				output: [{ type: "message", content: [{ type: "output_text", text: "回答" }] }],
-			}),
-		)
-		.mockResolvedValueOnce(new Response("failure", { status: 500 }));
+	fetcher.mockResolvedValueOnce(new Response("failure", { status: 500 }));
 	const first = batch();
 	await processGenerationBatch(first, bindings, fetcher);
 	expect(first.messages[0]?.retry).toHaveBeenCalledOnce();
 	await processGenerationBatch(batch(), bindings, fetcher);
-	expect(fetcher).toHaveBeenCalledTimes(2);
+	expect(fetcher).toHaveBeenCalledOnce();
 });

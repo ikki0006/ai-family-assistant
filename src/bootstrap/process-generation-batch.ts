@@ -1,5 +1,5 @@
 import { createRespondToMention } from "../application/conversation/respond-to-mention";
-import { createFuguTextGenerator } from "../infrastructure/ai/fugu-text-generator";
+import { createWorkersAiTextGenerator } from "../infrastructure/ai/workers-ai-text-generator";
 import { createLineAnswerSender } from "../infrastructure/line/answer-sender";
 import { diagnostics } from "../infrastructure/observability/diagnostics";
 import { createGenerationClaims } from "../infrastructure/persistence/d1/generation-claims";
@@ -23,9 +23,10 @@ export async function processGenerationBatch(
 				message.ack();
 				continue;
 			}
-			const apiKey = env.FUGU_API_KEY?.trim();
+			const gatewayId = env.AI_GATEWAY_ID?.trim();
 			const token = env.LINE_CHANNEL_ACCESS_TOKEN?.trim();
-			if (!apiKey || !token || !env.DB) throw new Error("Missing generation configuration");
+			if (!env.AI || !gatewayId || !token || !env.DB)
+				throw new Error("Missing generation configuration");
 			if (!(await createGenerationClaims(env.DB).claim(job.eventId, now))) {
 				message.ack();
 				continue;
@@ -33,7 +34,7 @@ export async function processGenerationBatch(
 			const respond = createRespondToMention(
 				createLineAnswerSender(token, job, fetcher, diagnostics),
 				job.groupId,
-				createFuguTextGenerator(apiKey, fetcher, diagnostics),
+				createWorkersAiTextGenerator(env.AI, gatewayId, diagnostics),
 				diagnostics,
 			);
 			await respond({ ...job, chatType: "group", mentioned: true });

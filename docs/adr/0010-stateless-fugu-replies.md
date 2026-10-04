@@ -4,6 +4,8 @@
 
 Accepted (2026-10-04)
 
+Fugu接続は[ADR-0012](0012-workers-ai-budget.md)で置き換える。QueueとLINE配送の判断は継続する。
+
 ## Context
 
 家族グループで疎通ができたため、記憶機能に先立ってLLMを接続する。

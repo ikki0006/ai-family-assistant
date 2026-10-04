@@ -77,7 +77,8 @@ describe("signed LINE webhook", () => {
 		const response = await createApp(
 			{
 				...bindings,
-				FUGU_API_KEY: "test-key",
+				AI: { run: vi.fn() } as unknown as Ai,
+				AI_GATEWAY_ID: "test-gateway",
 				JOBS_QUEUE: {
 					send: () => {
 						throw new Error("Unexpected enqueue");
@@ -226,11 +227,16 @@ describe("group-only access", () => {
 	});
 });
 
-it("enqueues a signed mention without waiting for or calling Fugu", async () => {
+it("enqueues a signed mention without waiting for or calling Workers AI", async () => {
 	const send = vi.fn().mockResolvedValue(undefined);
 	const fetcher = vi.fn<typeof fetch>();
 	const app = createApp(
-		{ ...bindings, FUGU_API_KEY: "test-key", JOBS_QUEUE: { send } as unknown as Queue },
+		{
+			...bindings,
+			AI: { run: vi.fn() } as unknown as Ai,
+			AI_GATEWAY_ID: "test-gateway",
+			JOBS_QUEUE: { send } as unknown as Queue,
+		},
 		fetcher,
 	);
 	const message = { ...event("@bot こんにちは", true), webhookEventId: "test-event" };
@@ -251,7 +257,12 @@ it("fails the webhook if durable enqueue fails", async () => {
 	const send = vi.fn().mockRejectedValue(new Error("queue unavailable"));
 	const fetcher = vi.fn<typeof fetch>();
 	const app = createApp(
-		{ ...bindings, FUGU_API_KEY: "test-key", JOBS_QUEUE: { send } as unknown as Queue },
+		{
+			...bindings,
+			AI: { run: vi.fn() } as unknown as Ai,
+			AI_GATEWAY_ID: "test-gateway",
+			JOBS_QUEUE: { send } as unknown as Queue,
+		},
 		fetcher,
 	);
 	expect(

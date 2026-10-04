@@ -1,5 +1,5 @@
 {
 	"extends": "./tsconfig.json",
 	"compilerOptions": { "types": [], "lib": ["ES2022"] },
-	"include": ["src/application/**/*.ts"]
+	"include": ["src/core/**/*.ts", "src/domain/**/*.ts", "src/application/**/*.ts"]
 }

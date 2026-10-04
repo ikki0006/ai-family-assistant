@@ -2,6 +2,7 @@ import type { Diagnostics } from "../ports/diagnostics";
 import type { GenerationQueue } from "../ports/generation-queue";
 import type { ReplySender } from "../ports/reply-sender";
 import type { TextGenerator } from "../ports/text-generator";
+import { AiUsageLimitError } from "../ports/text-generator";
 
 export interface IncomingText {
 	eventId?: string;
@@ -62,10 +63,12 @@ export function createRespondToMention(
 		try {
 			answer = (await generator.generate(text)).trim();
 			if (!answer) throw new Error("Empty model response");
-		} catch {
+		} catch (error) {
 			await sender.reply(
 				message.replyToken,
-				"今は回答を作れませんでした。少し待ってから、もう一度話しかけてください。",
+				error instanceof AiUsageLimitError
+					? "AIの予算または利用回数の上限に達したため、今は回答できません。"
+					: "今は回答を作れませんでした。少し待ってから、もう一度話しかけてください。",
 			);
 			return;
 		}

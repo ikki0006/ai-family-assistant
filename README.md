@@ -1,11 +1,14 @@
 # AI Family Assistant
 
 家族のLINEグループで会話の記憶と通知を扱うアシスタント。
-現在はヘルスチェック、`@bot ping`の疎通確認、許可した家族グループでのメンションに対するFuguの回答を実装している。
-会話の記憶と定期通知は未実装。D1は重複生成防止のイベントIDだけに使う。
+現在はヘルスチェック、`@bot ping`の疎通確認、許可した家族グループでのメンションに対するWorkers AIの回答を実装している。
+会話の記憶は未実装。D1には重複生成防止ID、収集設定、通知済み記録を保存する。
 
 - [ディレクトリ構成と責務](docs/architecture.md)
 - [設計判断の一覧](docs/adr/README.md)
+- [残タスク](docs/remaining-tasks.md)
+
+層に依存しない共通型は`src/core`に置く。coreはapplicationや外部SDKに依存せず、将来のdomainからも参照できる。
 
 ## 開発環境
 
@@ -45,11 +48,27 @@ pnpm dev
 `LINE_ALLOWED_USER_ID`は不要。以前登録した場合は削除できる。
 ローカルのlocalhostへLINEから直接接続はできないため、実LINEの確認には公開したHTTPS URLが必要になる。
 
-## Fuguの設定と動作
+## Workers AIの設定と動作
 
-Workerの **Settings → Variables and Secrets（Build内ではない）** に、`FUGU_API_KEY`をSecretとして登録する。
-ローカルでは`.dev.vars`に設定する。キーはチャットやGitに貼らない。
-OpenAI TypeScript SDKのResponses APIを`https://api.sakana.ai/v1`へ接続し、モデルは通常の`fugu`に固定する。Ultraへの切り替えや自動フォールバックはしない。
+Terraformの`cloudflare_ai_gateway.family`を先に適用し、Workers BuildsでAI binding付きのWorkerを配備する。
+`AI_GATEWAY_ID`は非秘密の設定。CloudflareのAI bindingを使うので、実行時のAI APIキーは不要。
+モデルは`@cf/qwen/qwen3-30b-a3b-fp8`。Fuguや他のプロバイダーへの自動フォールバックはしない。
+以前の`FUGU_API_KEY`は参照しないため、切り替え確認後に削除できる。
+
+Gatewayは本文ログ・キャッシュを無効化し、認証を必須にする。
+通常のWorkers AI課金（postpaid）を使うため、プリペイドCreditsの購入は不要。
+無料枠を超えて使うにはWorkers Paidへの加入が必要で、カード登録だけとは異なる。
+ローカルテストはAI bindingをモックする。本番AIを使う開発時は費用が発生する。
+
+### AI予算
+
+- 全モデル・全用途の合計で、直近31日40 USD、直近24時間2 USDのSpend limits。
+- APIの金額単位はUSD、時間窓は秒。Cloudflare画面でも40ドル/31日、2ドル/日と表示されることを確認済み。
+- 月1万円の総額目標に対し、税・為替・Workers/D1/Queues/DO料金の余裕を残す。円建て請求の厳密な上限保証ではない。
+- 予算は月初リセットではなくsliding window。予算または回数制限時は429を扱い、AIを迂回して呼ばない。
+- Gatewayの費用計算はbest effortで、実行中リクエストなどで多少超過し得る。入力・出力・同時実行も制限する。
+- 返信と、今後追加する要約は必ず同じGatewayを使用する。記憶機能はこの変更には含めない。
+- Gatewayの設定は`infra/ai.tf`を変更してTerraformで適用する。
 
 - `@bot 今日の晩ごはんの案を3つ教えて`のように、メンションと本文を送る。
 - 署名・許可グループ・メンションを検証してからQueueへ渡す。Queueへの保存完了後にWebhookへ200を返す。
@@ -57,26 +76,26 @@ OpenAI TypeScript SDKのResponses APIを`https://api.sakana.ai/v1`へ接続し�
 - 受信から45秒未満で完成した場合はReply、以降はPushを使う。Replyの明確な400拒否もPushへ切り替えるが、通信失敗や500では二重送信を避けるため切り替えない。
 - PushはLINEの月間送信枠を受信人数分消費する。Replyは通数に含まれない。
 - 過去の会話は送らず、毎回そのメッセージだけで回答する。画像や添付ファイル、外部ツールは対象外。
-- APIキー未設定や生成失敗時には短い案内を返信する。`ping`はLLMを呼ばず動作する。
-- SDKの自動リトライとQueueの再試行は無効。同時consumer数は2。月額料金そのものの上限保証ではない。
+- AI binding・Gateway未設定や生成失敗時には短い案内を返信する。`ping`はLLMを呼ばず動作する。
+- アプリとQueueの自動再試行は無効。同時consumer数は2。月額料金そのものの上限保証ではない。
 
 本文と回答はDBやアプリログへ保存しないが、処理待ちの本文・group ID・reply tokenはQueueに一時保持される。
 未処理の古いジョブは10分で処理対象外とする。失敗ジョブはDLQに入り、Queueの保持期間が終わるまで残るため、必要に応じて手動で破棄する。
 D1の重複防止IDは生成前に確保し、7日を超えた記録を次のジョブ処理時に削除する。
 処理中断や送信失敗後も同じイベントでは再生成しない。再実行は新しいメンションで行う。
-この設計では回答の確実な再送までは保証しない。Sakana側のデータ保持はサービス側の規約に従う。
+この設計では回答の確実な再送までは保証しない。モデルのデータの扱いはCloudflare Workers AIの規約に従う。
 
 ### 初回配備順序
 
 1. `pnpm exec wrangler d1 migrations apply DB --remote`で処理ID用テーブルを作る。
 2. mainへのpushで、`queue()`を持つWorkerをWorkers Buildsから配備する。
 3. Terraformのplan/applyでQueue consumerとDLQへの接続を作る。
-4. 実行時Secretに`FUGU_API_KEY`を登録し、家族グループからメンションで確認する。
+4. TerraformでAI Gatewayを作成してからAI binding付きWorkerを配備し、家族グループからメンションで確認する。
 
 consumerはTerraformが管理し、Wranglerにはproducer bindingだけを置く。
 `pnpm dev`だけではconsumerを接続しないため、ローカルの生成・Queue処理は`pnpm test:workers`で検証する。
 
-参考: [Sakana API](https://console.sakana.ai/models)、[OpenAI SDK](https://developers.openai.com/api/docs/libraries)、[LINEの通数](https://developers.line.biz/ja/docs/messaging-api/pricing/)。
+参考: [Workers AI](https://developers.cloudflare.com/workers-ai/)、[Spend limits](https://developers.cloudflare.com/ai-gateway/features/spend-limits/)、[LINEの通数](https://developers.line.biz/ja/docs/messaging-api/pricing/)。
 
 ## 品質チェック
 
@@ -101,7 +120,7 @@ Lefthookは設定済みだが、Gitフックへの登録には`pnpm hooks:instal
 CloudflareリソースはTerraform、アプリ配備はWorkers BuildsからWranglerで管理する。
 `infra/`にWorker、公開設定、D1、ジョブ用Queue、DLQを定義する。
 D1の`DB` bindingと通常Queueの`JOBS_QUEUE` producerをwrangler.jsoncに設定している。
-bindingはアプリ配備で反映される。D1には生成イベントIDのテーブルを作り、Queue consumerとDLQ接続はTerraformで管理する。Cronは未実装。
+bindingはアプリ配備で反映される。D1には生成イベントIDのテーブルを作り、Queue consumerとDLQ接続はTerraformで管理する。ゴミ出し通知のCronもTerraformで管理する。
 詳細は[ADR-0008](docs/adr/0008-workers-builds-and-provisioned-resources.md)を参照する。
 
 ```sh
@@ -165,7 +184,7 @@ Workers Buildsのビルドログと、Workerの実行時ログは別のもの。
 | `line_api_failed` | `upstreamStatus`。429ならレート制限など |
 | `line_transport_failed` | LINE APIへの接続失敗・タイムアウト |
 | `reply_failed` | 同じ実行のLINE API・通信エラー |
-| `llm_not_configured` | 実行時Secretの`FUGU_API_KEY` |
+| `llm_not_configured` | `AI` bindingと`AI_GATEWAY_ID` |
 | `llm_auth_failed` | Sakana APIキーの有効性・利用権限 |
 | `llm_api_failed` | `upstreamStatus`。429ならSakanaの利用制限など |
 | `llm_timeout` | 120秒以内に生成が完了しなかった |
@@ -210,3 +229,32 @@ Cloudflare provider 5.26.0にはWorkers Builds接続用の専用リソースが�
 参考: [Workers Builds設定](https://developers.cloudflare.com/workers/ci-cd/builds/configuration/)、[ビルド環境のバージョン指定](https://developers.cloudflare.com/workers/ci-cd/builds/build-image/)。
 
 参考: [署名検証](https://developers.line.biz/en/docs/messaging-api/verify-webhook-signature/)、[メンション情報](https://developers.line.biz/en/docs/messaging-api/receiving-messages/#webhook-message-with-mention-to-bot)、[Workersのローカル環境変数](https://developers.cloudflare.com/workers/local-development/environment-variables/)。
+
+## ゴミ出し通知
+
+収集日の前日23時・当日8時（JST）に、許可済み家族グループへPushする。LLMは使わない。
+TerraformがCron `0,5,10 14,23 * * *`を管理する。5分・10分後は失敗時の再試行用で、送信済みなら何もしない。
+LINE retry keyとD1の送信済み記録で重複を防止する。送信済み記録は90日後に次の成功時に整理する。
+
+収集設定はD1の`garbage_schedule`のid=1、`config_json`に平文JSONで保存する。
+町名・丁目は保存しない。実際の曜日・週番号や例外日はGitに入れず、本番D1にパラメーター付きSQLで登録する。
+マイグレーションにはテーブル定義だけを含める。例示・テストは架空の品目と曜日だけを使う。
+
+設定形式（架空例）:
+
+```json
+{
+  "validFrom": "2026-04-01",
+  "validThrough": "2027-03-31",
+  "rules": [{ "label": "架空品目", "weekday": 2, "weeks": [2, 4] }],
+  "overrides": { "2027-01-01": [] }
+}
+```
+
+曜日は日曜0〜土曜6、weeks省略は毎週。overridesはその日全体を置き換え、空配列は収集なし。
+設定の有効期間外は送らないため、年度切り替え前に更新する。
+12月31日〜1月3日は例外未登録なら通常曜日の通知をせず、特別日程の確認を促す。
+当日8時は最終確認であり、収集期限を延ばすものではない。
+
+配備順序: D1マイグレーション → 本番設定登録 → scheduled handler配備 → Terraform Cron適用。
+WranglerにはCronを定義せず、Terraformを唯一の管理元にする。

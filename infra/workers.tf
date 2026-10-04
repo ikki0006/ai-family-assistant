@@ -18,3 +18,11 @@ resource "cloudflare_worker" "bot" {
     previews_enabled = false
   }
 }
+
+# JST 23:00 and 08:00. Additional invocations retry failed sends with the same key.
+# Apply after the version exporting scheduled() is deployed.
+resource "cloudflare_workers_cron_trigger" "reminders" {
+  account_id  = var.account_id
+  script_name = cloudflare_worker.bot.name
+  schedules   = [{ cron = "0,5,10 14,23 * * *" }]
+}

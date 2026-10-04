@@ -17,7 +17,7 @@ domainとapplicationの両方にmemoryを設けると、実際の責務がない
 - bootstrapで実装を組み立てる。applicationからinfrastructureの実装をimportしない。
 - 現在はDBがないため、Drizzleのテーブルやモデルは追加しない。
 - DB導入時は独立した`src/schema`にテーブル定義と推論型を置く。applicationからは`import type`で参照し、SQL実行はRepository内に閉じ込める。
-- schema導入時に、その型参照だけを許す依存検査ルールを追加する。現在の検査設定はapplication内の参照だけを許可する。
+- schema導入時に、その型参照だけを許す依存検査ルールを追加する。共通型の参照はADR-0013に従う。
 - 型共有によるDB構造への依存を受け入れ、同じデータ形の手書きentity型を重複させない。
 - `presentation/router`という命名、名前付きexport、引数による依存注入は維持する。
 

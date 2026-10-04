@@ -1,7 +1,7 @@
 import { createRespondToMention } from "../application/conversation/respond-to-mention";
 import { getHealth } from "../application/health/get-health";
-import type { ConfigurationIssue } from "../application/ports/diagnostics";
-import { createFuguTextGenerator } from "../infrastructure/ai/fugu-text-generator";
+import type { ConfigurationIssue } from "../core/diagnostics";
+import { createWorkersAiTextGenerator } from "../infrastructure/ai/workers-ai-text-generator";
 import { createLineReplySender } from "../infrastructure/line/reply-sender";
 import { createSignatureVerifier } from "../infrastructure/line/verify-signature";
 import { diagnostics } from "../infrastructure/observability/diagnostics";
@@ -11,7 +11,8 @@ import { createRouter } from "../presentation/router/create-router";
 export interface Bindings {
 	JOBS_QUEUE?: Queue;
 	DB?: D1Database;
-	FUGU_API_KEY?: string;
+	AI?: Pick<Ai, "run">;
+	AI_GATEWAY_ID?: string;
 	LINE_CHANNEL_SECRET?: string;
 	LINE_CHANNEL_ACCESS_TOKEN?: string;
 	LINE_ALLOWED_GROUP_ID?: string;
@@ -37,8 +38,8 @@ export function createApp(env: Bindings = {}, fetcher: typeof fetch = fetch) {
 				? createRespondToMention(
 						createLineReplySender(token, fetcher, diagnostics),
 						groupId,
-						env.FUGU_API_KEY?.trim()
-							? createFuguTextGenerator(env.FUGU_API_KEY.trim(), fetcher, diagnostics)
+						env.AI && env.AI_GATEWAY_ID?.trim()
+							? createWorkersAiTextGenerator(env.AI, env.AI_GATEWAY_ID.trim(), diagnostics)
 							: undefined,
 						diagnostics,
 						createGenerationQueue(env.JOBS_QUEUE),

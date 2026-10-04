@@ -2,7 +2,8 @@ import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import type { IncomingText } from "../../application/conversation/respond-to-mention";
 import type { getHealth } from "../../application/health/get-health";
-import type { ConfigurationIssue, Diagnostics } from "../../application/ports/diagnostics";
+import type { Diagnostics } from "../../application/ports/diagnostics";
+import type { ConfigurationIssue } from "../../core/diagnostics";
 import { parseWebhook } from "./line-webhook";
 
 export interface RouterDependencies {

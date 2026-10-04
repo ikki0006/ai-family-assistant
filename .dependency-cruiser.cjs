@@ -7,7 +7,19 @@ module.exports = {
 			name: "application-depends-on-core-only",
 			severity: "error",
 			from: { path: "^src/application/" },
-			to: { pathNot: "^src/application/" },
+			to: { pathNot: "^src/(application|core|domain)/" },
+		},
+		{
+			name: "core-is-independent",
+			severity: "error",
+			from: { path: "^src/core/" },
+			to: { pathNot: "^src/core/" },
+		},
+		{
+			name: "domain-depends-on-core-only",
+			severity: "error",
+			from: { path: "^src/domain/" },
+			to: { pathNot: "^src/(domain|core)/" },
 		},
 		{
 			name: "ports-do-not-depend-on-use-cases",

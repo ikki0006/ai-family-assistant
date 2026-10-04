@@ -15,6 +15,9 @@
 | [0008](0008-workers-builds-and-provisioned-resources.md) | Workers BuildsとDB・Queueの先行作成 | Accepted |
 | [0009](0009-group-only-access.md) | 家族グループ限定のアクセス | Accepted |
 | [0010](0010-stateless-fugu-replies.md) | Queue経由のFugu応答とReply/Push切替 | Accepted |
+| [0011](0011-garbage-reminders.md) | D1の収集設定と定期Push | Accepted |
+| [0012](0012-workers-ai-budget.md) | Workers AIとGatewayによる予算制限 | Accepted |
+| [0013](0013-shared-core.md) | 層に依存しない共通定義の配置 | Accepted |
 
 新規の判断は[template.md](template.md)を使い、4桁の番号とkebab-caseの名前を付ける。
 状態はProposed、Accepted、Deprecated、Supersededから選ぶ。

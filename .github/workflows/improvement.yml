@@ -1,0 +1,112 @@
+name: Approved improvement
+run-name: Improvement ${{ inputs.request_id }} v${{ inputs.version }}
+on:
+  workflow_dispatch:
+    inputs:
+      request_id:
+        required: true
+        type: string
+      version:
+        required: true
+        type: string
+      specification:
+        required: true
+        type: string
+permissions: {}
+concurrency:
+  group: approved-improvements
+  cancel-in-progress: false
+jobs:
+  generate:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.3
+      - name: Generate bounded files (one Gemini call)
+        run: node scripts/improvement-agent/generate.mjs
+        env:
+          CF_IMPROVEMENT_GATEWAY_TOKEN: ${{ secrets.CF_IMPROVEMENT_GATEWAY_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          AI_GATEWAY_ID: ai-family-assistant
+          IMPROVEMENT_SPECIFICATION: ${{ inputs.specification }}
+          IMPROVEMENT_ID: ${{ inputs.request_id }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: improvement-files
+          path: improvement-files.json
+          retention-days: 1
+  verify:
+    needs: generate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.11.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.3
+      - uses: hashicorp/setup-terraform@v3
+      - run: pnpm install --frozen-lockfile
+      - uses: actions/download-artifact@v4
+        with:
+          name: improvement-files
+      - run: node scripts/improvement-agent/apply.mjs improvement-files.json
+      - name: Verify without AI or production secrets
+        run: pnpm verify
+  publish:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.3
+      - uses: actions/download-artifact@v4
+        with:
+          name: improvement-files
+      - run: node scripts/improvement-agent/apply.mjs improvement-files.json
+      - name: Create draft PR without executing generated code
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUEST_ID: ${{ inputs.request_id }}
+          REQUEST_VERSION: ${{ inputs.version }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          [[ "$REQUEST_ID" =~ ^[a-f0-9-]{36}$ ]]
+          [[ "$REQUEST_VERSION" =~ ^[0-9]+$ ]]
+          branch="improvement/$REQUEST_ID-v$REQUEST_VERSION"
+          if gh api "repos/$GH_REPO/git/ref/heads/$branch" >/dev/null 2>&1; then
+            exit 0
+          fi
+          git switch -c "$branch"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/application/prompts tests/unit
+          git diff --cached --quiet && exit 0
+          git commit -m "Implement approved improvement $REQUEST_ID"
+          gh auth setup-git
+          git push origin "$branch"
+          printf 'Approved request: %s (version %s)\n\nGenerated with Gemini via the budget-controlled AI Gateway; pnpm verify passed in an isolated job. Review behavior and tests before merging.\n' "$REQUEST_ID" "$REQUEST_VERSION" > /tmp/improvement-pr-body.md
+          gh pr create --draft --base main --head "$branch" --title "Improvement $REQUEST_ID" --body-file /tmp/improvement-pr-body.md

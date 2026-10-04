@@ -10,3 +10,6 @@ LINE_ALLOWED_GROUP_ID=""
 # No provider API key is stored in Worker bindings.
 
 TAVILY_API_KEY=""
+
+# Optional approved improvements. Repository-scoped Actions: write only.
+GH_IMPROVEMENT_TOKEN=""

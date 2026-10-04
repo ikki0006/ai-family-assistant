@@ -12,6 +12,7 @@ import {
 	type IncomingText,
 	createRespondToMention,
 } from "../application/conversation/respond-to-mention";
+import { handleImprovement } from "../application/improvements/handle-improvement";
 import {
 	memoryCommand,
 	memoryInventory,
@@ -28,12 +29,14 @@ import { deliverReminder } from "../application/reminders/deliver-reminder";
 import { manageReminders, parseReminderAction } from "../application/reminders/manage-reminders";
 import type { ReminderAction } from "../application/reminders/manage-reminders";
 import { createGeminiTextGenerator } from "../infrastructure/ai/gemini-text-generator";
+import { createImprovementDispatcher } from "../infrastructure/github/improvement-dispatcher";
 import { createLineAnswerSender } from "../infrastructure/line/answer-sender";
 import { createLinePushSender } from "../infrastructure/line/push-sender";
 import { createLineReplySender } from "../infrastructure/line/reply-sender";
 import { SessionConversationStore } from "../infrastructure/memory/session-conversation-store";
 import { diagnostics } from "../infrastructure/observability/diagnostics";
 import { createGarbageScheduleStore } from "../infrastructure/persistence/d1/garbage-schedule";
+import { createImprovementRepository } from "../infrastructure/persistence/d1/improvement-repository";
 import { createLongTermMemory } from "../infrastructure/persistence/d1/long-term-memory";
 import { createReminderRepository } from "../infrastructure/persistence/d1/reminders";
 import { createGenerationQueue } from "../infrastructure/queue/generation-queue";
@@ -59,6 +62,37 @@ export class FamilyConversationAgent extends DurableObject<Bindings> {
 	async receive(message: IncomingText): Promise<void> {
 		const group = this.env.LINE_ALLOWED_GROUP_ID?.trim();
 		if (!group || message.groupId !== group || message.chatType !== "group") return;
+		if (
+			message.mentioned &&
+			!message.unsend &&
+			/^(改善[:：]|改善承認(?:\s|$))/.test(message.text.trim())
+		) {
+			let response = "自動改善の設定がまだ完了していません。";
+			if (this.env.DB && this.env.GH_IMPROVEMENT_TOKEN && message.eventId) {
+				try {
+					response =
+						(await handleImprovement(
+							{
+								text: message.text,
+								groupId: group,
+								eventId: message.eventId,
+							},
+							{
+								repository: createImprovementRepository(this.env.DB),
+								dispatcher: createImprovementDispatcher(this.env.GH_IMPROVEMENT_TOKEN),
+							},
+						)) ?? "改善承認には確認メッセージのIDと版を指定してください。";
+				} catch {
+					response = "改善依頼の処理に失敗しました。GitHubの実行状況を確認してください。";
+				}
+			}
+			await createLineReplySender(
+				this.env.LINE_CHANNEL_ACCESS_TOKEN ?? "",
+				fetch,
+				diagnostics,
+			).reply(message.replyToken, response);
+			return;
+		}
 		await this.locked(async () => {
 			const now = Date.now();
 			const replyToBot =

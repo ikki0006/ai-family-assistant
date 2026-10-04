@@ -24,11 +24,12 @@
 		"typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.core.json",
 		"test": "vitest run --config vitest.config.ts",
 		"test:workers": "vitest run --config vitest.workers.config.ts",
-		"verify:app": "pnpm check && pnpm typecheck && pnpm test && pnpm test:workers && pnpm build",
+		"verify:app": "pnpm check && pnpm typecheck && pnpm test && pnpm test:improvement-agent && pnpm test:workers && pnpm build",
 		"verify": "pnpm verify:app && pnpm infra:fmt",
 		"hooks:install": "lefthook install",
 		"infra:fmt": "terraform -chdir=infra fmt -check -recursive",
-		"infra:validate": "terraform -chdir=infra validate"
+		"infra:validate": "terraform -chdir=infra validate",
+		"test:improvement-agent": "node --test scripts/improvement-agent/*.test.mjs"
 	},
 	"dependencies": {
 		"agents": "0.26.0",

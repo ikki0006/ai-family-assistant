@@ -40,4 +40,12 @@ AI Gatewayの予算は31日40 USD・24時間2 USD。Geminiの料金はGoogle側�
 ## 最新の配備
 
 - 2026-10-04: 非同期記憶整理・長期記憶・記憶/予定一覧を配備。[配備記録](releases/2026-10-04-memory.md)。
-- 自己改善は保留・未配備。自己改善の作業中コードはローカルに残し、今回のGit反映から除外する。
+- 記憶配備時は自己改善を除外した。自己改善の最新状況は末尾の試行タスクを参照する。
+
+## 自己改善（Geminiによる小規模試行）
+
+- [x] プロンプト・単体テスト限定の生成をFuguからGemini/Gatewayへ変更。生成・検証・PR公開ジョブを分離。
+- [ ] Actions Secret `CF_IMPROVEMENT_GATEWAY_TOKEN`（専用AI Gateway Run）とvariable `CLOUDFLARE_ACCOUNT_ID`を設定。
+- [ ] GitHub ActionsによるPR作成許可、main保護、Worker Secret `GH_IMPROVEMENT_TOKEN`を確認。
+- [ ] migration 0004、Workflowをmainへ反映し、Workerを配備。
+- [ ] 承認した架空の改善依頼で生成→検証→Draft PRを実機確認。

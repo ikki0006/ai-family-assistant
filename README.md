@@ -326,4 +326,25 @@ Tavilyキーを他用途で使う分は含まないため、無料枠を守る�
 検索には最新の発言から作った検索語だけを送る。モデルに私的情報の除外を指示するが完全な匿名化は保証しない。
 キー未登録の場合は従来どおり検索なしで回答する。検索機能の追加だけでは本番Secretの登録・配備は行われない。
 
+### LINEから改善PRを依頼する（初版）
+
+`@bot 改善: 回答をもっと短くするようにして`で仕様を確認し、家族グループのメンバーが`@bot 改善承認 <ID> <版>`を送るとGitHub Actionsを起動する。
+通常会話・会話記憶はGitHubに渡さず、承認した仕様だけを渡す。個人情報を仕様に含めないこと。
+初版の変更対象は`src/application/prompts/*.ts`と`tests/unit/*.ts`の最大5ファイル。Geminiが既存の予算Gateway経由で1回生成し、検証を通った場合のみDraft PRを作る。機能全般の自動実装や自動mergeは行わない。
+
+準備:
+
+1. `migrations/0004_improvements.sql`を含むD1 migrationを配備する。
+2. GitHubのSettings → Developer settings → Personal access tokens → Fine-grained tokensで対象リポジトリだけを選び、ActionsをRead and writeにする。
+3. Worker Secret `GH_IMPROVEMENT_TOKEN`にそのトークンを登録する。個人IDによる承認者制限は行わず、既存の許可済み家族グループに限定する。ローカルでは同名の`.dev.vars`を使う。
+4. Cloudflareで対象アカウントの`AI Gateway → Run`だけを持つ専用APIトークンを発行する。GitHubリポジトリのSettings → Secrets and variables → Actions → Secretsへ`CF_IMPROVEMENT_GATEWAY_TOKEN`として登録する。同画面のVariablesへ`CLOUDFLARE_ACCOUNT_ID`を登録する。Googleキーは既存GatewayのStored Keys/defaultを使う。Terraform管理トークンはActionsに渡さない。
+5. Settings → Actions → General → Workflow permissionsでGitHub ActionsによるPR作成を許可する。PR公開jobだけが`contents: write`と`pull-requests: write`を使う。
+6. `.github/workflows/improvement.yml`をmainへ反映してから利用する。Workflow/ref/repositoryはコードで固定し、LINEから変更できない。
+
+承認期限は24時間。受付結果が不明なときは再送しないため、[実行履歴](https://github.com/ikki0006/ai-family-assistant/actions/workflows/improvement.yml)を確認する。
+完成したPRの自動LINE通知は初版では未対応。実行履歴とPull requestsから確認する。
+モデルは`gemini-3.8-flash`固定。入力コード80,000文字まで、生成1回・120秒・出力8,000 tokenまで。検証失敗では停止し、自動修正・再試行・他モデルへのfallbackはしない。生成jobは5分、検証jobは10分、公開jobは5分で停止する。Googleの従量料金とActions実行時間が発生し、会話とGateway予算を共有する。専用トークンでもAI Gateway Run権限はアカウント内の全Gatewayに及ぶため、生成jobのみに渡す。
+
+改善workflowの起動イベントは`workflow_dispatch`のみ。push・PR・scheduleでは起動しない。GitHubの仕様上、Actions権限付きAPIに加え、リポジトリ書込権限を持つユーザーの手動起動も可能。PAT単体でLINE由来を証明するものではない。mainの保護ルールは別途設定し、Actions botによる直接更新も禁止する。
+
 リマインドは登録時に「何をするか」が分かる通知文を生成・保存し、定刻にはその文をAI呼び出しなしで送る。日時だけの返信でも直前の行動を引き継ぐ。以前の短いラベルには行動情報がないため、自動で推測・書き換えず必要に応じて通知内容を変更する。

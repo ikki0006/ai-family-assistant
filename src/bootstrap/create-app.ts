@@ -28,6 +28,7 @@ export interface Bindings {
 	AI?: Pick<Ai, "gateway">;
 	AI_GATEWAY_ID?: string;
 	TAVILY_API_KEY?: string;
+	GH_IMPROVEMENT_TOKEN?: string;
 	LINE_CHANNEL_SECRET?: string;
 	LINE_CHANNEL_ACCESS_TOKEN?: string;
 	LINE_ALLOWED_GROUP_ID?: string;

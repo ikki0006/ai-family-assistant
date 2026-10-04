@@ -19,7 +19,7 @@ import { participationPrompt, reminderPlannerPrompt } from "../application/promp
 import { deliverReminder } from "../application/reminders/deliver-reminder";
 import { manageReminders, parseReminderAction } from "../application/reminders/manage-reminders";
 import type { ReminderAction } from "../application/reminders/manage-reminders";
-import { createWorkersAiTextGenerator } from "../infrastructure/ai/workers-ai-text-generator";
+import { createGeminiTextGenerator } from "../infrastructure/ai/gemini-text-generator";
 import { createLineAnswerSender } from "../infrastructure/line/answer-sender";
 import { createLinePushSender } from "../infrastructure/line/push-sender";
 import { createLineReplySender } from "../infrastructure/line/reply-sender";
@@ -41,12 +41,7 @@ export class FamilyConversationAgent extends DurableObject<Bindings> {
 	}
 	private generator(timeoutMs = 120_000) {
 		if (!this.env.AI || !this.env.AI_GATEWAY_ID) throw new Error("Missing AI configuration");
-		return createWorkersAiTextGenerator(
-			this.env.AI,
-			this.env.AI_GATEWAY_ID,
-			diagnostics,
-			timeoutMs,
-		);
+		return createGeminiTextGenerator(this.env.AI, this.env.AI_GATEWAY_ID, diagnostics, timeoutMs);
 	}
 	async receive(message: IncomingText): Promise<void> {
 		const group = this.env.LINE_ALLOWED_GROUP_ID?.trim();
@@ -176,7 +171,7 @@ export class FamilyConversationAgent extends DurableObject<Bindings> {
 			if (job.passive) return;
 			answer =
 				error instanceof AiUsageLimitError
-					? "AIの予算または利用回数の上限に達したため、今は回答できません。"
+					? "AIの残高不足、または予算・利用回数の上限により、今は回答できません。"
 					: "今は回答を作れませんでした。少し待ってから、もう一度話しかけてください。";
 		}
 		await this.locked(async () => {

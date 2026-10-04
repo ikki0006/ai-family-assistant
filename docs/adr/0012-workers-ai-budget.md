@@ -22,7 +22,7 @@ ADR-0010のFugu接続部分を置き換え、Queue・重複防止・Reply/Push�
 - 最大生成120秒、最大出力800トークン、既存の同時consumer数2を維持する。
 - Agents Sessionsは次の記憶実装で導入予定。この変更は記憶を持たない推論先の切り替えまで。
 
-Gemini 3.8 Flashへの切り替えは後続タスクとし、Credits購入エラーの解消までは本ADRのQwenを使用する。
+モデル・課金経路はADR-0016でGeminiとGoogle BYOKへ変更。Gatewayの予算設定は維持する。
 
 ## Consequences
 

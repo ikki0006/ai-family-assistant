@@ -4,7 +4,7 @@ import { getHealth } from "../application/health/get-health";
 import type { GenerationJob } from "../application/ports/generation-queue";
 import type { ReminderJob } from "../application/ports/reminder-repository";
 import type { ConfigurationIssue } from "../core/diagnostics";
-import { createWorkersAiTextGenerator } from "../infrastructure/ai/workers-ai-text-generator";
+import { createGeminiTextGenerator } from "../infrastructure/ai/gemini-text-generator";
 import { createLineReplySender } from "../infrastructure/line/reply-sender";
 import { createSignatureVerifier } from "../infrastructure/line/verify-signature";
 import { diagnostics } from "../infrastructure/observability/diagnostics";
@@ -23,7 +23,7 @@ export interface Bindings {
 		};
 	};
 	DB?: D1Database;
-	AI?: Pick<Ai, "run">;
+	AI?: Pick<Ai, "gateway">;
 	AI_GATEWAY_ID?: string;
 	LINE_CHANNEL_SECRET?: string;
 	LINE_CHANNEL_ACCESS_TOKEN?: string;
@@ -57,7 +57,7 @@ export function createApp(env: Bindings = {}, fetcher: typeof fetch = fetch) {
 							createLineReplySender(token, fetcher, diagnostics),
 							groupId,
 							env.AI && env.AI_GATEWAY_ID?.trim()
-								? createWorkersAiTextGenerator(env.AI, env.AI_GATEWAY_ID.trim(), diagnostics)
+								? createGeminiTextGenerator(env.AI, env.AI_GATEWAY_ID.trim(), diagnostics)
 								: undefined,
 							diagnostics,
 							createGenerationQueue(env.JOBS_QUEUE),

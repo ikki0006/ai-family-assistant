@@ -84,7 +84,7 @@ export function createRespondToMention(
 			await sender.reply(
 				message.replyToken,
 				error instanceof AiUsageLimitError
-					? "AIの予算または利用回数の上限に達したため、今は回答できません。"
+					? "AIの残高不足、または予算・利用回数の上限により、今は回答できません。"
 					: "今は回答を作れませんでした。少し待ってから、もう一度話しかけてください。",
 			);
 			return;

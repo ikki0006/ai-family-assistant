@@ -1,5 +1,5 @@
 import { createRespondToMention } from "../application/conversation/respond-to-mention";
-import { createWorkersAiTextGenerator } from "../infrastructure/ai/workers-ai-text-generator";
+import { createGeminiTextGenerator } from "../infrastructure/ai/gemini-text-generator";
 import { createLineAnswerSender } from "../infrastructure/line/answer-sender";
 import { diagnostics } from "../infrastructure/observability/diagnostics";
 import { createGenerationClaims } from "../infrastructure/persistence/d1/generation-claims";
@@ -55,7 +55,7 @@ export async function processGenerationBatch(
 			const respond = createRespondToMention(
 				createLineAnswerSender(token, job, fetcher, diagnostics),
 				job.groupId,
-				createWorkersAiTextGenerator(env.AI, gatewayId, diagnostics),
+				createGeminiTextGenerator(env.AI, gatewayId, diagnostics),
 				diagnostics,
 			);
 			await respond({ ...job, chatType: "group", mentioned: true });

@@ -135,7 +135,7 @@ it("responds to bot quotes, ignores human quotes, and queues relevant unmentione
 				value: {
 					LINE_ALLOWED_GROUP_ID: group,
 					LINE_CHANNEL_ACCESS_TOKEN: "test",
-					AI: { run: vi.fn() },
+					AI: { gateway: () => ({ run: vi.fn() }) },
 					AI_GATEWAY_ID: "test",
 					JOBS_QUEUE: { send },
 				},
@@ -196,10 +196,13 @@ it("executes a model plan before confirming and prevents passive implicit creati
 			const at = `${new Date(time + 3600000 + 9 * 3600000).toISOString().slice(0, 16)}:00+09:00`;
 			const run = vi.fn().mockImplementation(async () =>
 				Response.json({
-					choices: [
+					candidates: [
 						{
-							message: {
-								content: JSON.stringify({ action: "create", title: "夕飯", kind: "once", at }),
+							finishReason: "STOP",
+							content: {
+								parts: [
+									{ text: JSON.stringify({ action: "create", title: "夕飯", kind: "once", at }) },
+								],
 							},
 						},
 					],
@@ -210,7 +213,7 @@ it("executes a model plan before confirming and prevents passive implicit creati
 					DB: db,
 					LINE_ALLOWED_GROUP_ID: group,
 					LINE_CHANNEL_ACCESS_TOKEN: "test",
-					AI: { run },
+					AI: { gateway: () => ({ run }) },
 					AI_GATEWAY_ID: "test",
 				},
 				configurable: true,

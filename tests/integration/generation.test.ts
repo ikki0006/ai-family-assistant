@@ -6,18 +6,17 @@ import { createGenerationClaims } from "../../src/infrastructure/persistence/d1/
 
 const db = (env as unknown as { DB: D1Database }).DB;
 const group = `C${"2".repeat(32)}`;
+const run = vi.fn().mockImplementation(async () =>
+	Response.json({
+		candidates: [{ finishReason: "STOP", content: { parts: [{ text: "こんにちは！" }] } }],
+	}),
+);
 const bindings = {
 	DB: db,
 	LINE_ALLOWED_GROUP_ID: group,
 	LINE_CHANNEL_ACCESS_TOKEN: "test-token",
 	AI_GATEWAY_ID: "test-gateway",
-	AI: {
-		run: vi
-			.fn()
-			.mockImplementation(async () =>
-				Response.json({ choices: [{ message: { content: "こんにちは！" } }] }),
-			),
-	} as unknown as Ai,
+	AI: { gateway: () => ({ run }) } as unknown as Ai,
 };
 
 beforeAll(async () => {
@@ -25,7 +24,7 @@ beforeAll(async () => {
 });
 beforeEach(async () => {
 	await db.prepare("DELETE FROM generation_claims").run();
-	vi.mocked(bindings.AI.run).mockClear();
+	vi.mocked(run).mockClear();
 });
 
 function batch(groupId = group, receivedAt = Date.now()) {
@@ -55,13 +54,13 @@ function transport() {
 	return vi.fn<typeof fetch>().mockImplementation(async () => Response.json({}));
 }
 
-it("generates with Workers AI and D1 deduplication, then replies once", async () => {
+it("generates with Gemini through AI Gateway and D1 deduplication, then replies once", async () => {
 	const fetcher = transport();
 	const first = batch();
 	await processGenerationBatch(first, bindings, fetcher);
 	await processGenerationBatch(batch(), bindings, fetcher);
 	expect(first.messages[0]?.ack).toHaveBeenCalledOnce();
-	expect(bindings.AI.run).toHaveBeenCalledOnce();
+	expect(run).toHaveBeenCalledOnce();
 	expect(fetcher.mock.calls.map(([url]) => String(url))).toEqual([
 		"https://api.line.me/v2/bot/message/reply",
 	]);

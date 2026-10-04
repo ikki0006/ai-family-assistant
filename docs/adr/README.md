@@ -30,3 +30,5 @@
 このプロジェクトでは依存方向の検査にdependency-cruiserを使い、ADRに対応する検査コマンドを記載する。
 
 - [ADR-0015: LINEから通知を管理し5分間隔で実行する](0015-line-reminders.md)
+
+- [ADR-0016: Gemini 3.8 Flashを既存Gateway経由で使う](0016-gemini-flash.md)

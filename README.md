@@ -1,7 +1,7 @@
 # AI Family Assistant
 
 家族のLINEグループで会話の記憶と通知を扱うアシスタント。
-現在はヘルスチェック、`@bot ping`の疎通確認、許可した家族グループでのメンションに対するWorkers AIの回答を実装している。
+現在はヘルスチェック、`@bot ping`の疎通確認、許可した家族グループでのメンションに対するGeminiの回答を実装している。
 会話は家族ごとのDurable Object内のAgents Sessionsに7日間保存する。D1には重複生成防止ID、収集設定、通知済み記録を保存する。
 
 - [ディレクトリ構成と責務](docs/architecture.md)
@@ -48,16 +48,15 @@ pnpm dev
 `LINE_ALLOWED_USER_ID`は不要。以前登録した場合は削除できる。
 ローカルのlocalhostへLINEから直接接続はできないため、実LINEの確認には公開したHTTPS URLが必要になる。
 
-## Workers AIの設定と動作
+## Geminiの設定と動作
 
 Terraformの`cloudflare_ai_gateway.family`を先に適用し、Workers BuildsでAI binding付きのWorkerを配備する。
 `AI_GATEWAY_ID`は非秘密の設定。CloudflareのAI bindingを使うので、実行時のAI APIキーは不要。
-モデルは`@cf/qwen/qwen3-30b-a3b-fp8`。Fuguや他のプロバイダーへの自動フォールバックはしない。
+モデルは`gemini-3.8-flash`。`AI.gateway(id).run()`からGoogle AI Studioのネイティブエンドポイントを呼ぶ。Fuguや他のプロバイダーへの自動フォールバックはしない。
 以前の`FUGU_API_KEY`は参照しないため、切り替え確認後に削除できる。
 
 Gatewayは本文ログ・キャッシュを無効化し、認証を必須にする。
-通常のWorkers AI課金（postpaid）を使うため、プリペイドCreditsの購入は不要。
-無料枠を超えて使うにはWorkers Paidへの加入が必要で、カード登録だけとは異なる。
+Google AI Studioの課金済みプロジェクトのキーをGatewayのStored Keysへ、provider `google-ai-studio`・alias `default`で登録する。Google側へ課金され、Cloudflare Creditsは使わない。GatewayはBYOK専用。GoogleキーをWorkerやTerraformへ複製しない。
 ローカルテストはAI bindingをモックする。本番AIを使う開発時は費用が発生する。
 
 ### AI予算
@@ -72,7 +71,7 @@ Gatewayは本文ログ・キャッシュを無効化し、認証を必須にす�
 
 - `@bot 今日の晩ごはんの案を3つ教えて`のように、メンションと本文を送る。
 - 署名・許可グループを検証し、メンション・botへの引用返信・通知の参加候補をQueueへ渡す。Queueへの保存完了後にWebhookへ200を返す。
-- Queue consumerで最大120秒生成する。入力は2,000 UTF-16コード単位、生成リクエストは最大800出力トークン、LINE表示は最大2,000 Unicodeコードポイントに制限する。
+- Queue consumerで最大120秒生成する。入力は2,000 UTF-16コード単位、生成リクエストは最大2048出力トークン、LINE表示は最大2,000 Unicodeコードポイントに制限する。
 - 受信から45秒未満で完成した場合はReply、以降はPushを使う。Replyの明確な400拒否もPushへ切り替えるが、通信失敗や500では二重送信を避けるため切り替えない。
 - PushはLINEの月間送信枠を受信人数分消費する。Replyは通数に含まれない。
 - 通常発言を含めた直近の会話と必要時の要約を回答に利用する。画像や添付ファイル、外部ツールは対象外。
@@ -83,7 +82,7 @@ Gatewayは本文ログ・キャッシュを無効化し、認証を必須にす�
 未処理の古いジョブは10分で処理対象外とする。失敗ジョブはDLQに入り、Queueの保持期間が終わるまで残るため、必要に応じて手動で破棄する。
 D1の重複防止IDは生成前に確保し、7日を超えた記録を次のジョブ処理時に削除する。
 処理中断や送信失敗後も同じイベントでは再生成しない。再実行は新しいメンションで行う。
-この設計では回答の確実な再送までは保証しない。モデルのデータの扱いはCloudflare Workers AIの規約に従う。
+この設計では回答の確実な再送までは保証しない。Google有料APIの入力・出力は製品改善に使われないが、不正利用検知等の保存は別に存在する。
 
 ### 初回配備順序
 
@@ -296,3 +295,11 @@ Cronは5分間隔です。通常0〜5分程度遅れて届きます。通知の�
 スタンプはすべて保存・推論・返信の対象外です。他人へのリプライに無条件で割り込むこともありません。
 
 配備順はD1の`0003_reminders.sql`適用 → Workers Buildsでアプリ配備 → TerraformでCron変更です。新しいSecretは不要です。
+
+## Geminiの接続経路
+
+`gemini-3.8-flash`のネイティブ形式を使用しています（[ADR-0016](docs/adr/0016-gemini-flash.md)）。
+通常回答・要約・通知判定で同じGatewayの予算を共有します。thinkingLevelはlow、maxOutputTokensは2048です。
+Geminiの料金はGoogle AI Studioの有料プロジェクトに課金します。GatewayのStored KeysにGoogle AI Studioキーをalias `default`で登録します。Workers Paidの基本料金には含まれません。
+`AI.run()`によるモデル指定ではBYOK登録後も402になったため、`AI.gateway(id).run()`にproviderとGoogle専用endpointを明示します。
+GoogleのStored Keysを使う経路でHTTP 200を確認済みです。新しいWorker Secretは不要です。

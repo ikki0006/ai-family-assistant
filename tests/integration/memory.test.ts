@@ -122,10 +122,16 @@ it("passes saved conversation to AI and records only a successfully delivered an
 				LINE_CHANNEL_ACCESS_TOKEN: "test-token",
 				AI_GATEWAY_ID: "test-gateway",
 				AI: {
-					run: async (_model: unknown, input: unknown) => {
-						modelInput = JSON.stringify(input);
-						return Response.json({ choices: [{ message: { content: "明日はカレーです。" } }] });
-					},
+					gateway: () => ({
+						run: async (input: unknown) => {
+							modelInput = JSON.stringify(input);
+							return Response.json({
+								candidates: [
+									{ finishReason: "STOP", content: { parts: [{ text: "明日はカレーです。" }] } },
+								],
+							});
+						},
+					}),
 				},
 			},
 			configurable: true,
@@ -177,10 +183,12 @@ it("drops an in-flight answer if an unsend invalidates its context", async () =>
 				LINE_CHANNEL_ACCESS_TOKEN: "test-token",
 				AI_GATEWAY_ID: "test",
 				AI: {
-					run: async () => {
-						started();
-						return result;
-					},
+					gateway: () => ({
+						run: async () => {
+							started();
+							return result;
+						},
+					}),
 				},
 			},
 			configurable: true,
@@ -210,7 +218,13 @@ it("drops an in-flight answer if an unsend invalidates its context", async () =>
 				text: "",
 				replyToken: "",
 			});
-			finish(Response.json({ choices: [{ message: { content: "deleted information" } }] }));
+			finish(
+				Response.json({
+					candidates: [
+						{ finishReason: "STOP", content: { parts: [{ text: "deleted information" }] } },
+					],
+				}),
+			);
 			await pending;
 			expect(sends).toBe(0);
 			expect(state.storage.sql.exec("SELECT id FROM family_messages").toArray()).toEqual([]);

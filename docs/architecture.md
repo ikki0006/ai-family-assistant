@@ -1,7 +1,7 @@
 # アーキテクチャ
 
 application、infrastructure、presentation、bootstrapからなる単一のCloudflare Worker。
-現在の機能はヘルスチェック、LINE疎通確認、短期会話を踏まえたWorkers AIへの質問と回答。
+現在の機能はヘルスチェック、LINE疎通確認、短期会話を踏まえたGeminiへの質問と回答。
 会話はグループ別DOのSessionsで7日間保存する。定期通知はCronとD1の設定で処理する。
 TerraformでD1、ジョブ用Queue、DLQを先に定義し、アプリ配備はWorkers Buildsを使う。
 Queue consumerとDLQはTerraformで接続する。AI Gatewayの予算制限とCronもTerraformが管理する。
@@ -64,13 +64,13 @@ coreは他層や外部パッケージに依存しない。将来domainを設け�
 2. ZodでWebhookを検証し、受信形式をapplicationの入力へ変換する。
 3. グループではbot宛てのメンション、許可対象、コマンドを確認する。
 4. `ping`は即返信。それ以外はQueueへ保存してからWebhookを完了する。
-5. consumerで許可グループを再確認し、D1でイベントIDを確保してからWorkers AIを呼ぶ。
+5. consumerで許可グループを再確認し、D1でイベントIDを確保してからAI Gateway経由でGeminiを呼ぶ。
 6. 短い生成はReply、受信後45秒以降はPushで回答を送る。
 
 会話保存と返信判定を分ける。botへのメンション・引用返信には回答する。
 非メンションの通知関連候補はAIが参加の要否を判断し、不要なら沈黙する。スタンプは入口で無視する。
 通知操作はD1へ保存し、5分Cron→Queue→家族DOからPushする。送信直前に状態とversionを照合する。
-許可グループの直近履歴と要約をWorkers AIへ送る。
+許可グループの直近履歴と要約をAI Gateway経由でGeminiへ送る。
 本文と送信済み回答をDOへ保存する。QueueとDLQには本文を含めず、会話IDと世代番号を保持する。
 
 ## 判断の記録

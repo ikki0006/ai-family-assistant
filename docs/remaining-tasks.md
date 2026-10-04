@@ -4,11 +4,12 @@
 
 ## Geminiへの切り替え
 
-- [ ] AI Gateway Credits購入エラーを解消する。カード必須という表示が出るが、読み取りAPIではデフォルト支払い方法と支払い情報の存在を確認済み。原因は未確定。ユーザーの判断で調査をいったん保留する。
-- [ ] Cloudflare Unified Billing経由の`google/gemini-3.8-flash`へ実装を変更する。現在の作業ツリーはQwen指定。
-- [ ] Terraformの`byok_only`を変更し、Gateway認証・予算制限・本文ログ無効を維持する。
-- [ ] Gemini向けの応答解析、出力・思考量制限、テスト、READMEとADRを更新する。
-- [ ] Credits購入後に疎通確認し、アプリをデプロイする。購入や自動チャージの操作はユーザーが行う。
+- [x] `gemini-3.8-flash`の入出力変換・low思考・2048出力上限を実装。
+- [x] Google AI Studioの有料プロジェクトとGatewayのStored Keys（Google AI Studio / default）を設定。
+- [x] TerraformでGatewayを`byok_only=true`へ戻した。予算・認証・本文ログ無効を維持。
+- [x] `AI.run()`経路は402のため、`AI.gateway(id).run()`のGoogleネイティブ経路に変更。追加Secret不要。
+- [x] 実APIで架空の履歴訂正・18時の通知登録・雑談時の沈黙判定を確認（各約1〜2秒）。
+- [ ] Workers Buildsで本番へ配備し、LINEから会話・通知操作を確認。
 
 ## ゴミ出し通知
 
@@ -23,7 +24,7 @@
 - [ ] 本番配備後、通常発言の記憶とメンション回答・履歴リセットをLINEで確認する。
 - [ ] 長期記憶への抽出、更新、削除の仕様を決めて実装する。
 
-AI Gatewayの予算設定は作成済み。現在の推論先はWorkers AIのQwenで、Gateway経由の実API応答を確認済み。記憶導入前のAI bindingからLINEへの応答はユーザー確認済み。Geminiへの切り替えはCredits購入エラー解消後に行う。
+AI Gatewayの予算は31日40 USD・24時間2 USD。Geminiの料金はGoogle側へ課金される。実際の消費額はGoogle AI Studioでも確認する。
 
 ## LINEリマインド・会話への参加
 

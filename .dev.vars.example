@@ -6,4 +6,5 @@ LINE_CHANNEL_ACCESS_TOKEN=""
 # Once set, only members of this group may send "@bot ping".
 LINE_ALLOWED_GROUP_ID=""
 
-# AI uses the Workers AI binding and AI_GATEWAY_ID in wrangler.jsonc; no AI API key.
+# Gemini uses AI.gateway() and AI_GATEWAY_ID with Google AI Studio Stored Keys (default alias).
+# No provider API key is stored in Worker bindings.

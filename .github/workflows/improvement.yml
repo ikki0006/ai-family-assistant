@@ -1,5 +1,5 @@
-name: Approved improvement
-run-name: Improvement ${{ inputs.request_id }} v${{ inputs.version }}
+name: 承認された改善
+run-name: 改善実装（依頼 ${{ inputs.request_id }} / 版 ${{ inputs.version }}）
 on:
   workflow_dispatch:
     inputs:
@@ -94,6 +94,7 @@ jobs:
           REQUEST_ID: ${{ inputs.request_id }}
           REQUEST_VERSION: ${{ inputs.version }}
           GH_REPO: ${{ github.repository }}
+          IMPROVEMENT_SPECIFICATION: ${{ inputs.specification }}
         run: |
           set -euo pipefail
           [[ "$REQUEST_ID" =~ ^[a-f0-9-]{36}$ ]]
@@ -107,8 +108,8 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add src/application/prompts tests/unit
           git diff --cached --quiet && exit 0
-          git commit -m "Implement approved improvement $REQUEST_ID"
+          node scripts/improvement-agent/pr-description.mjs "$RUNNER_TEMP/improvement/improvement-files.json" "$RUNNER_TEMP/improvement-title.txt" "$RUNNER_TEMP/improvement-body.md"
+          git commit -F "$RUNNER_TEMP/improvement-title.txt"
           gh auth setup-git
           git push origin "$branch"
-          printf 'Approved request: %s (version %s)\n\nGenerated with Gemini via the budget-controlled AI Gateway; pnpm verify passed in an isolated job. Review behavior and tests before merging.\n' "$REQUEST_ID" "$REQUEST_VERSION" > /tmp/improvement-pr-body.md
-          gh pr create --draft --base main --head "$branch" --title "Improvement $REQUEST_ID" --body-file /tmp/improvement-pr-body.md
+          gh pr create --draft --base main --head "$branch" --title "$(cat "$RUNNER_TEMP/improvement-title.txt")" --body-file "$RUNNER_TEMP/improvement-body.md"

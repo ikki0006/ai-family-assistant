@@ -1,13 +1,18 @@
-import { formatJst, nextOccurrence, parseJst } from "../../domain/reminders/recurrence";
-import type { Reminder } from "../../domain/reminders/recurrence";
+import {
+	describeRecurrence,
+	formatJst,
+	nextOccurrence,
+	parseJst,
+	validateSchedule,
+} from "../../domain/reminders/recurrence";
+import type { Recurrence, Reminder, Schedule } from "../../domain/reminders/recurrence";
 import type { ReminderRepository } from "../ports/reminder-repository";
-export type ReminderAction = {
+export type ReminderAction = Partial<Recurrence> & {
 	action: "none" | "clarify" | "list" | "create" | "update" | "pause" | "resume" | "delete";
 	question?: string;
 	id?: string;
 	version?: number;
 	title?: string;
-	kind?: "once" | "daily" | "weekly";
 	at?: string;
 };
 export function parseReminderAction(raw: string): ReminderAction {
@@ -31,13 +36,25 @@ export function parseReminderAction(raw: string): ReminderAction {
 			throw new Error("Invalid action field");
 	if (o.version !== undefined && (!Number.isSafeInteger(o.version) || Number(o.version) < 1))
 		throw new Error("Invalid version");
-	if (o.kind !== undefined && !["once", "daily", "weekly"].includes(String(o.kind)))
+	if (
+		o.kind !== undefined &&
+		!["once", "daily", "weekly", "monthly", "yearly"].includes(String(o.kind))
+	)
 		throw new Error("Invalid recurrence");
+	for (const [field, max] of [
+		["interval", 100],
+		["day", 31],
+		["month", 12],
+	] as const)
+		if (
+			o[field] !== undefined &&
+			(!Number.isInteger(o[field]) || Number(o[field]) < 1 || Number(o[field]) > max)
+		)
+			throw new Error("Invalid recurrence field");
 	return o as ReminderAction;
 }
-const kinds = { once: "単発", daily: "毎日", weekly: "毎週" };
 export function describeReminder(r: Reminder) {
-	return `${r.title}［${kinds[r.kind]}・${r.status === "active" ? "有効" : r.status === "paused" ? "停止中" : "終了"}］\n次回: ${formatJst(r.next_at)}（日本時間）`;
+	return `${r.title}［${describeRecurrence(r)}・${r.status === "active" ? "有効" : r.status === "paused" ? "停止中" : "終了"}］\n次回: ${formatJst(r.next_at)}（日本時間）`;
 }
 export async function manageReminders(
 	repo: ReminderRepository,
@@ -67,24 +84,36 @@ export async function manageReminders(
 		if (!action.title?.trim() || action.title.length > 200 || !action.kind || !action.at)
 			return "通知の内容と日時を確認させてください。";
 		let at: number;
+		let schedule: Schedule;
 		try {
 			at = parseJst(action.at);
+			schedule = {
+				kind: action.kind,
+				at,
+				interval: action.interval ?? (previous?.kind === action.kind ? previous.interval : 1) ?? 1,
+				day: action.day ?? (previous?.kind === action.kind ? previous.day : null) ?? null,
+				month: action.month ?? (previous?.kind === action.kind ? previous.month : null) ?? null,
+			};
+			validateSchedule(schedule);
 		} catch {
-			return "通知日時を解釈できませんでした。日付と時刻を指定してください。";
+			return "通知日時・繰り返し条件を確認させてください。周期、日付と時刻を指定してください。";
 		}
-		if (at <= now || at > now + 366 * 86400000)
-			return "通知日時は今から1年以内の未来を指定してください。";
+		if (at <= now || at > now + 366 * 86400000 * (schedule.interval ?? 1))
+			return "通知日時は未来を指定してください（初回は周期の間隔×1年以内）。";
 		if (action.action === "create") {
 			if ((await repo.list(group)).length >= 100)
 				return "通知は100件までです。不要な通知を削除してください。";
-			const r = await repo.create(group, event, action.title.trim(), { kind: action.kind, at });
+			const r = await repo.create(group, event, action.title.trim(), schedule);
 			return `登録しました。\n${describeReminder(r)}\n通知は5分間隔で確認するため、通常0〜5分ほど遅れます。`;
 		}
 		if (previous) {
 			const next = {
 				...previous,
 				title: action.title.trim(),
-				kind: action.kind,
+				kind: schedule.kind,
+				interval: schedule.interval ?? 1,
+				day: schedule.day ?? null,
+				month: schedule.month ?? null,
 				anchor_at: at,
 				next_at: at,
 			};
@@ -101,7 +130,7 @@ export async function manageReminders(
 		next.title = "";
 	}
 	if (action.action === "resume") {
-		const at = nextOccurrence({ kind: previous.kind, at: previous.anchor_at }, now);
+		const at = nextOccurrence({ ...previous, at: previous.anchor_at }, now);
 		if (at === null)
 			return "単発の通知日時を過ぎています。新しい日時へ変更してから再開してください。";
 		next.next_at = at;

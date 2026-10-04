@@ -20,8 +20,21 @@ export function createReminderRepository(db: D1Database): ReminderRepository {
 		},
 		async create(group, event, title, schedule) {
 			await db
-				.prepare("INSERT OR IGNORE INTO reminders VALUES (?,?,?,?,?,?,'active',1,?)")
-				.bind(event, group, title, schedule.kind, schedule.at, schedule.at, event)
+				.prepare(
+					"INSERT OR IGNORE INTO reminders (id,group_id,title,kind,anchor_at,next_at,status,version,last_event,interval,day,month) VALUES (?,?,?,?,?,?,'active',1,?,?,?,?)",
+				)
+				.bind(
+					event,
+					group,
+					title,
+					schedule.kind,
+					schedule.at,
+					schedule.at,
+					event,
+					schedule.interval ?? 1,
+					schedule.day ?? null,
+					schedule.month ?? null,
+				)
 				.run();
 			const result = await this.get(group, event);
 			if (!result) throw new Error("Reminder creation failed");
@@ -30,11 +43,14 @@ export function createReminderRepository(db: D1Database): ReminderRepository {
 		async change(group, event, previous, next) {
 			const result = await db
 				.prepare(
-					"UPDATE reminders SET title=?,kind=?,anchor_at=?,next_at=?,status=?,version=version+1,last_event=? WHERE group_id=? AND id=? AND version=?",
+					"UPDATE reminders SET title=?,kind=?,interval=?,day=?,month=?,anchor_at=?,next_at=?,status=?,version=version+1,last_event=? WHERE group_id=? AND id=? AND version=?",
 				)
 				.bind(
 					next.title,
 					next.kind,
+					next.interval ?? 1,
+					next.day ?? null,
+					next.month ?? null,
 					next.anchor_at,
 					next.next_at,
 					next.status,

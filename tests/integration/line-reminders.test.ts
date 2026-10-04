@@ -2,6 +2,7 @@ import { env } from "cloudflare:workers";
 import { beforeAll, beforeEach, expect, it, vi } from "vitest";
 import previousMigration from "../../migrations/0002_garbage_reminders.sql?raw";
 import migration from "../../migrations/0003_reminders.sql?raw";
+import calendarMigration from "../../migrations/0006_calendar_reminders.sql?raw";
 import { deliverReminder } from "../../src/application/reminders/deliver-reminder";
 import { manageReminders } from "../../src/application/reminders/manage-reminders";
 import { dispatchReminders } from "../../src/bootstrap/dispatch-reminders";
@@ -13,6 +14,22 @@ const now = Date.parse("2026-10-04T08:00:00Z");
 beforeAll(async () => {
 	await db.exec(previousMigration.replace(/--[^\n]*/g, "").replace(/\n/g, " "));
 	await db.exec(migration.replace(/\n/g, " "));
+	await db
+		.prepare("INSERT INTO reminders VALUES ('legacy','g','legacy','weekly',1,2,'paused',4,'event')")
+		.run();
+	await db.prepare("INSERT INTO line_reminder_deliveries VALUES ('legacy-key',1)").run();
+	await db.exec(calendarMigration.replace(/\n/g, " "));
+	expect(await repo.get("g", "legacy")).toMatchObject({
+		kind: "weekly",
+		status: "paused",
+		version: 4,
+		anchor_at: 1,
+		next_at: 2,
+		interval: 1,
+		day: null,
+		month: null,
+	});
+	expect(await repo.wasSent("legacy-key")).toBe(true);
 });
 beforeEach(async () => {
 	await db.batch([
@@ -277,4 +294,99 @@ it("sends the saved action sentence without losing drop-off versus collection in
 		now,
 	);
 	expect(sender.push.mock.calls[0]?.[1]).toBe(`🔔 ${title}`);
+});
+
+it("registers monthly rules, delivers, pauses and resumes preserving the requested day", async () => {
+	const start = Date.parse("2027-02-01T00:00:00+09:00");
+	expect(
+		await manageReminders(
+			repo,
+			group,
+			"month",
+			{
+				action: "create",
+				title: "請求書を確認する時間ですよ。",
+				kind: "monthly",
+				day: 31,
+				at: "2027-02-28T08:00:00+09:00",
+			},
+			start,
+		),
+	).toContain("毎月");
+	const r = await repo.get(group, "month");
+	if (!r) throw new Error("Missing reminder");
+	const sender = { push: vi.fn().mockResolvedValue(undefined) };
+	await deliverReminder(
+		repo,
+		sender,
+		{ type: "reminder", groupId: group, id: r.id, version: r.version, at: r.next_at },
+		group,
+		r.next_at,
+	);
+	expect((await repo.get(group, r.id))?.next_at).toBe(Date.parse("2027-03-31T08:00:00+09:00"));
+	await manageReminders(
+		repo,
+		group,
+		"pause-month",
+		{ action: "pause", id: r.id, version: 2 },
+		r.next_at,
+	);
+	await manageReminders(
+		repo,
+		group,
+		"resume-month",
+		{ action: "resume", id: r.id, version: 3 },
+		Date.parse("2027-04-01T00:00:00+09:00"),
+	);
+	expect(await repo.get(group, r.id)).toMatchObject({
+		day: 31,
+		next_at: Date.parse("2027-04-30T08:00:00+09:00"),
+		status: "active",
+	});
+});
+it("lists and edits annual recurrence without losing leap day or interval", async () => {
+	const r = await repo.create(group, "annual", "点検する時間ですよ。", {
+		kind: "yearly",
+		interval: 2,
+		month: 2,
+		day: 29,
+		at: Date.parse("2027-02-28T08:00:00+09:00"),
+	});
+	expect(await manageReminders(repo, group, "list", { action: "list" }, now)).toContain(
+		"2年ごと 2月29日",
+	);
+	expect(
+		await manageReminders(
+			repo,
+			group,
+			"edit",
+			{
+				action: "update",
+				id: r.id,
+				version: 1,
+				title: "設備を点検する時間ですよ。",
+				kind: "yearly",
+				at: "2027-02-28T09:00:00+09:00",
+			},
+			now,
+		),
+	).toContain("変更しました");
+	expect(await repo.get(group, r.id)).toMatchObject({ interval: 2, month: 2, day: 29 });
+	expect(
+		await manageReminders(
+			repo,
+			group,
+			"invalid",
+			{
+				action: "create",
+				title: "点検",
+				kind: "yearly",
+				month: 4,
+				day: 31,
+				at: "2027-04-30T08:00:00+09:00",
+			},
+			now,
+		),
+	).toContain("確認");
+	expect(await repo.get(group, "invalid")).toBeNull();
 });

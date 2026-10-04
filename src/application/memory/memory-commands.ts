@@ -1,5 +1,5 @@
 import type { Reminder } from "../../domain/reminders/recurrence";
-import { formatJst } from "../../domain/reminders/recurrence";
+import { describeRecurrence, formatJst } from "../../domain/reminders/recurrence";
 import type { GarbageSchedule } from "../ports/garbage-schedule";
 import type { MemoryFact } from "../ports/long-term-memory";
 export type MemoryCommand =
@@ -37,12 +37,11 @@ export function scheduleInventory(
 	now: number,
 ): string {
 	const status = { active: "有効", paused: "停止中", done: "完了", deleted: "削除済み" };
-	const kind = { once: "単発", daily: "毎日", weekly: "毎週" };
 	const entries = reminders
 		.filter((r) => r.status !== "deleted")
 		.map(
 			(r) =>
-				`・${r.title}（${kind[r.kind]}・${status[r.status]}）\n${r.status === "done" ? "最終予定" : "次回予定"}: ${formatJst(r.next_at)}`,
+				`・${r.title}（${describeRecurrence(r)}・${status[r.status]}）\n${r.status === "done" ? "最終予定" : "次回予定"}: ${formatJst(r.next_at)}`,
 		);
 	if (garbage) {
 		const today = new Date(now + 9 * 3600000).toISOString().slice(0, 10);

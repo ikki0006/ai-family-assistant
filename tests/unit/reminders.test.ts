@@ -28,7 +28,7 @@ describe("reminder rules", () => {
 		for (const value of [
 			"null",
 			'{"action":"sql"}',
-			'{"action":"create","kind":"monthly"}',
+			'{"action":"create","kind":"hourly"}',
 			'{"action":"pause","version":"1"}',
 		])
 			expect(() => parseReminderAction(value)).toThrow();

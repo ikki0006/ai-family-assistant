@@ -2,6 +2,8 @@ import { z } from "zod";
 
 const jobSchema = z.object({
 	eventId: z.string().min(1).max(128),
+	passive: z.boolean().optional(),
+	quotedMessageId: z.string().min(1).optional(),
 	groupId: z.string().regex(/^C[0-9a-f]{32}$/),
 	text: z.string().trim().max(2000),
 	memory: z
@@ -14,6 +16,11 @@ const jobSchema = z.object({
 export function parseGenerationJob(value: unknown) {
 	const result = jobSchema.parse(value);
 	if (!result.text && !result.memory) throw new Error("Invalid job");
-	const { memory, ...base } = result;
-	return { ...base, ...(memory ? { memory } : {}) };
+	const { memory, passive, quotedMessageId, ...base } = result;
+	return {
+		...base,
+		...(memory ? { memory } : {}),
+		...(passive ? { passive } : {}),
+		...(quotedMessageId ? { quotedMessageId } : {}),
+	};
 }

@@ -22,7 +22,10 @@ export async function runGarbageReminder(
 			{
 				store: createGarbageScheduleStore(env.DB),
 				ledger: createReminderLedger(env.DB),
-				sender: createLinePushSender(token, fetcher, diagnostics),
+				sender: createLinePushSender(token, fetcher, diagnostics, async (id, text) => {
+					if (env.CONVERSATIONS)
+						await env.CONVERSATIONS.get(env.CONVERSATIONS.idFromName(groupId)).recordSent(id, text);
+				}),
 				groupId,
 			},
 			scheduledTime,

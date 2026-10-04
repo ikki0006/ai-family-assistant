@@ -4,6 +4,7 @@ import { createLineAnswerSender } from "../infrastructure/line/answer-sender";
 import { diagnostics } from "../infrastructure/observability/diagnostics";
 import { createGenerationClaims } from "../infrastructure/persistence/d1/generation-claims";
 import { parseGenerationJob } from "../presentation/queue/generation-job";
+import { parseReminderJob } from "../presentation/queue/reminder-job";
 import type { Bindings } from "./create-app";
 
 export async function processGenerationBatch(
@@ -13,6 +14,20 @@ export async function processGenerationBatch(
 ) {
 	for (const message of batch.messages) {
 		try {
+			if (
+				typeof message.body === "object" &&
+				message.body !== null &&
+				"type" in message.body &&
+				message.body.type === "reminder"
+			) {
+				const job = parseReminderJob(message.body);
+				if (job.groupId === env.LINE_ALLOWED_GROUP_ID?.trim()) {
+					if (!env.CONVERSATIONS) throw new Error("Missing conversations binding");
+					await env.CONVERSATIONS.get(env.CONVERSATIONS.idFromName(job.groupId)).deliver(job);
+				}
+				message.ack();
+				continue;
+			}
 			const job = parseGenerationJob(message.body);
 			const now = Date.now();
 			if (

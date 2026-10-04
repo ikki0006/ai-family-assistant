@@ -19,10 +19,10 @@ resource "cloudflare_worker" "bot" {
   }
 }
 
-# JST 23:00 and 08:00. Additional invocations retry failed sends with the same key.
+# Poll reminders every five minutes. Garbage scheduling remains JST 23:00 and 08:00 in application code.
 # Apply after the version exporting scheduled() is deployed.
 resource "cloudflare_workers_cron_trigger" "reminders" {
   account_id  = var.account_id
   script_name = cloudflare_worker.bot.name
-  schedules   = [{ cron = "0,5,10 14,23 * * *" }]
+  schedules   = [{ cron = "*/5 * * * *" }]
 }

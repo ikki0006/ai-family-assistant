@@ -24,6 +24,13 @@ export class SessionConversationStore implements ConversationStore {
 		);
 		sql.exec("INSERT OR IGNORE INTO family_meta VALUES (1,0,0,0)");
 		sql.exec(
+			"CREATE TABLE IF NOT EXISTS family_outgoing (id TEXT PRIMARY KEY,text TEXT NOT NULL,at INTEGER NOT NULL)",
+		);
+		sql.exec(
+			"CREATE TABLE IF NOT EXISTS family_participation (id INTEGER PRIMARY KEY,last_scan INTEGER NOT NULL,last_suggestion INTEGER NOT NULL)",
+		);
+		sql.exec("INSERT OR IGNORE INTO family_participation VALUES (1,0,0)");
+		sql.exec(
 			"CREATE TABLE IF NOT EXISTS family_messages (id TEXT PRIMARY KEY,event_id TEXT UNIQUE NOT NULL,day TEXT NOT NULL,at INTEGER NOT NULL,role TEXT NOT NULL)",
 		);
 		sql.exec("CREATE INDEX IF NOT EXISTS family_messages_time ON family_messages(at)");
@@ -34,6 +41,31 @@ export class SessionConversationStore implements ConversationStore {
 			"CREATE TABLE IF NOT EXISTS family_summaries (day TEXT PRIMARY KEY,text TEXT NOT NULL,through_at INTEGER NOT NULL)",
 		);
 		sql.exec("CREATE TABLE IF NOT EXISTS family_resets (id TEXT PRIMARY KEY,at INTEGER NOT NULL)");
+	}
+	recordOutgoing(id: string, text: string, now: number) {
+		this.sql.exec("INSERT OR REPLACE INTO family_outgoing VALUES (?,?,?)", id, text, now);
+	}
+	outgoing(id: string, now: number): string | undefined {
+		return this.sql
+			.exec<{ text: string }>(
+				"SELECT text FROM family_outgoing WHERE id=? AND at>?",
+				id,
+				now - RETENTION_MS,
+			)
+			.toArray()[0]?.text;
+	}
+	participation() {
+		return this.sql
+			.exec<{ last_scan: number; last_suggestion: number }>(
+				"SELECT * FROM family_participation WHERE id=1",
+			)
+			.one();
+	}
+	markScan(now: number) {
+		this.sql.exec("UPDATE family_participation SET last_scan=? WHERE id=1", now);
+	}
+	markSuggestion(now: number) {
+		this.sql.exec("UPDATE family_participation SET last_suggestion=? WHERE id=1", now);
 	}
 	meta() {
 		return this.sql
@@ -169,6 +201,7 @@ export class SessionConversationStore implements ConversationStore {
 	async forget(messageId: string, now: number): Promise<void> {
 		this.sql.exec("INSERT OR REPLACE INTO family_tombstones VALUES (?,?)", messageId, now);
 		this.invalidate();
+		this.sql.exec("DELETE FROM family_outgoing");
 		// All assistant messages could contain information derived from the removed message.
 		const rows = this.sql
 			.exec<IndexRow>("SELECT * FROM family_messages WHERE id=? OR role='assistant'", messageId)
@@ -190,9 +223,11 @@ export class SessionConversationStore implements ConversationStore {
 			.toArray())
 			await this.session(row.day).clearMessages();
 		this.sql.exec("DELETE FROM family_messages");
+		this.sql.exec("DELETE FROM family_outgoing");
 		this.sql.exec("DELETE FROM family_summaries");
 	}
 	async prune(now: number): Promise<void> {
+		this.sql.exec("DELETE FROM family_outgoing WHERE at<?", now - RETENTION_MS);
 		const rows = this.sql
 			.exec<IndexRow>(
 				"SELECT * FROM family_messages WHERE at<? OR at<=(SELECT reset_at FROM family_meta WHERE id=1) OR id IN (SELECT id FROM family_tombstones) OR (role='assistant' AND at<=(SELECT MAX(at) FROM family_tombstones))",

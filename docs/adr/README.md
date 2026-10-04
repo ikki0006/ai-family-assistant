@@ -28,3 +28,5 @@
 
 既存プロジェクト`recruta-ai-interview`のADR運用を参考にした。
 このプロジェクトでは依存方向の検査にdependency-cruiserを使い、ADRに対応する検査コマンドを記載する。
+
+- [ADR-0015: LINEから通知を管理し5分間隔で実行する](0015-line-reminders.md)

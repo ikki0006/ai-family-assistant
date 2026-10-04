@@ -16,6 +16,7 @@ const textEventSchema = z.object({
 	message: z.object({
 		type: z.literal("text"),
 		id: z.string().min(1).optional(),
+		quotedMessageId: z.string().min(1).optional(),
 		text: z.string().max(5000),
 		mention: z
 			.object({
@@ -84,6 +85,9 @@ export function parseWebhook(body: string): IncomingText[] | null {
 			{
 				...(value.webhookEventId ? { eventId: value.webhookEventId } : {}),
 				...(value.message.id ? { messageId: value.message.id } : {}),
+				...(value.message.quotedMessageId
+					? { quotedMessageId: value.message.quotedMessageId }
+					: {}),
 				...(value.source.userId ? { speaker: value.source.userId } : {}),
 				...(value.timestamp !== undefined ? { occurredAt: value.timestamp } : {}),
 				chatType: value.source.type,

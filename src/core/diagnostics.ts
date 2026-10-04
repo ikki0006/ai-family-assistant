@@ -1,6 +1,7 @@
 export type FailureCode =
 	| "llm_rate_or_budget_limited"
 	| "garbage_reminder_failed"
+	| "reminder_operation_failed"
 	| "line_not_configured"
 	| "invalid_signature"
 	| "invalid_payload"

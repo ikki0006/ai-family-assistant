@@ -10,8 +10,9 @@ export function createLineAnswerSender(
 	fetcher: typeof fetch = fetch,
 	diagnostics?: Diagnostics,
 	now: () => number = Date.now,
+	onSent?: (id: string, text: string) => Promise<void>,
 ): ReplySender {
-	const replySender = createLineReplySender(accessToken, fetcher, diagnostics);
+	const replySender = createLineReplySender(accessToken, fetcher, diagnostics, onSent);
 	return {
 		async reply(_replyToken, text) {
 			// Leave margin for LINE transport and token expiry.
@@ -24,7 +25,7 @@ export function createLineAnswerSender(
 					if (!(error instanceof LineReplyError) || error.status !== 400) throw error;
 				}
 			}
-			await createLinePushSender(accessToken, fetcher, diagnostics).push(
+			await createLinePushSender(accessToken, fetcher, diagnostics, onSent).push(
 				job.groupId,
 				text,
 				job.eventId,

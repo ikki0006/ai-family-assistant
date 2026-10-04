@@ -8,6 +8,8 @@ import type { MemoryReference } from "./conversation";
 
 export interface IncomingText {
 	eventId?: string;
+	quotedMessageId?: string;
+	passive?: boolean;
 	messageId?: string;
 	speaker?: string;
 	occurredAt?: number;
@@ -33,7 +35,7 @@ export function createRespondToMention(
 			!allowedGroupId ||
 			message.chatType !== "group" ||
 			message.groupId !== allowedGroupId ||
-			!message.mentioned
+			(!message.mentioned && !message.passive)
 		)
 			return;
 		const text = message.text.trim();
@@ -59,6 +61,8 @@ export function createRespondToMention(
 			}
 			await jobs.enqueue({
 				eventId: message.eventId,
+				...(message.passive ? { passive: true } : {}),
+				...(message.quotedMessageId ? { quotedMessageId: message.quotedMessageId } : {}),
 				groupId: allowedGroupId,
 				text: message.memory ? "" : text,
 				...(message.memory ? { memory: message.memory } : {}),

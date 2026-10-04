@@ -11,6 +11,7 @@ export function createLineReplySender(
 	accessToken: string,
 	fetcher: typeof fetch = fetch,
 	diagnostics?: Diagnostics,
+	onSent?: (id: string, text: string) => Promise<void>,
 ): ReplySender {
 	return {
 		async reply(replyToken, text) {
@@ -27,7 +28,7 @@ export function createLineReplySender(
 				throw error;
 			});
 			// Do not log provider response bodies, tokens, or conversations.
-			await response.body?.cancel();
+
 			if (!response.ok) {
 				diagnostics?.failure(
 					response.status === 401 ? "line_auth_failed" : "line_api_failed",
@@ -35,6 +36,13 @@ export function createLineReplySender(
 				);
 				throw new LineReplyError(response.status);
 			}
+			if (onSent) {
+				const body = (await response.json().catch(() => null)) as {
+					sentMessages?: { id?: string }[];
+				} | null;
+				const id = body?.sentMessages?.[0]?.id;
+				if (typeof id === "string") await onSent(id, text);
+			} else await response.body?.cancel();
 		},
 	};
 }

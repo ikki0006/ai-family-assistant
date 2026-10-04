@@ -6,6 +6,7 @@ export function createLinePushSender(
 	accessToken: string,
 	fetcher: typeof fetch = fetch,
 	diagnostics?: Diagnostics,
+	onSent?: (id: string, text: string) => Promise<void>,
 ): PushSender {
 	return {
 		async push(to, text, key) {
@@ -29,7 +30,7 @@ export function createLinePushSender(
 				diagnostics?.failure("line_transport_failed");
 				throw new Error("LINE push transport failed");
 			});
-			await response.body?.cancel();
+
 			if (response.status === 409 && response.headers.has("x-line-accepted-request-id")) return;
 			if (!response.ok) {
 				diagnostics?.failure(
@@ -38,6 +39,13 @@ export function createLinePushSender(
 				);
 				throw new LineReplyError(response.status);
 			}
+			if (onSent) {
+				const body = (await response.json().catch(() => null)) as {
+					sentMessages?: { id?: string }[];
+				} | null;
+				const id = body?.sentMessages?.[0]?.id;
+				if (typeof id === "string") await onSent(id, text);
+			} else await response.body?.cancel();
 		},
 	};
 }

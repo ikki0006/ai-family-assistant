@@ -9,6 +9,7 @@ Queue consumerとDLQはTerraformで接続する。AI Gatewayの予算制限とCr
 ```text
 src/
 ├── core/                      FailureCodeなど、層に依存しない共通定義
+├── domain/reminders/          繰り返し日時の純粋な計算
 ├── application/
 │   ├── ports/                 ReplySender、TextGenerator、GenerationQueueなど外部依存の契約
 │   ├── health/                ヘルスチェック
@@ -16,6 +17,7 @@ src/
 │   ├── prompts/               秘書・要約のデフォルト指示
 │   ├── memory/                必要時の会話要約
 │   ├── reminder/              収集日の判定とPush通知
+│   ├── reminders/             LINEからの通知管理・配信
 │   └── privacy/               後続の個人情報処理
 ├── infrastructure/
 │   ├── line/                  署名検証とLINE APIへの返信
@@ -33,7 +35,7 @@ src/
 ```
 
 機能のないディレクトリには配置先を示す`.gitkeep`だけを置く。
-domain層や専用entityクラスは設けない。
+domain/remindersには繰り返し日時計算を置く。専用entityクラスは設けない（ADR-0015）。
 DB導入時はDrizzleのテーブル定義から型を推論し、同じデータ形を手書きで重複定義しない。
 型の参照とSQLの実行は分け、SQLはRepositoryへ閉じ込める。
 
@@ -44,6 +46,8 @@ flowchart LR
   P[presentation] --> A[application]
   I[infrastructure] --> Ports[application/ports]
   A --> C[core]
+  A --> D[domain]
+  D --> C
   B[bootstrap] --> P
   B --> A
   B --> I
@@ -63,8 +67,9 @@ coreは他層や外部パッケージに依存しない。将来domainを設け�
 5. consumerで許可グループを再確認し、D1でイベントIDを確保してからWorkers AIを呼ぶ。
 6. 短い生成はReply、受信後45秒以降はPushで回答を送る。
 
-通常の発言と、他の人へのメンションには返信しない。
-会話保存は返信判定より前に実行する。通常発言には返信しない。
+会話保存と返信判定を分ける。botへのメンション・引用返信には回答する。
+非メンションの通知関連候補はAIが参加の要否を判断し、不要なら沈黙する。スタンプは入口で無視する。
+通知操作はD1へ保存し、5分Cron→Queue→家族DOからPushする。送信直前に状態とversionを照合する。
 許可グループの直近履歴と要約をWorkers AIへ送る。
 本文と送信済み回答をDOへ保存する。QueueとDLQには本文を含めず、会話IDと世代番号を保持する。
 

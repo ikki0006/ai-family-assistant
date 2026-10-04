@@ -40,6 +40,6 @@ export function receiveConversation(
 			message.eventId,
 			now(),
 		);
-		if (memory && message.mentioned) await respond({ ...message, memory });
+		if (memory && (message.mentioned || message.passive)) await respond({ ...message, memory });
 	};
 }

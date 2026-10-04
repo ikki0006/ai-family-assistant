@@ -2,6 +2,7 @@ import { createRespondToMention } from "../application/conversation/respond-to-m
 import type { IncomingText } from "../application/conversation/respond-to-mention";
 import { getHealth } from "../application/health/get-health";
 import type { GenerationJob } from "../application/ports/generation-queue";
+import type { ReminderJob } from "../application/ports/reminder-repository";
 import type { ConfigurationIssue } from "../core/diagnostics";
 import { createWorkersAiTextGenerator } from "../infrastructure/ai/workers-ai-text-generator";
 import { createLineReplySender } from "../infrastructure/line/reply-sender";
@@ -17,6 +18,8 @@ export interface Bindings {
 		get(id: DurableObjectId): {
 			receive(message: IncomingText): Promise<void>;
 			answer(job: GenerationJob): Promise<void>;
+			deliver(job: ReminderJob): Promise<void>;
+			recordSent(id: string, text: string): Promise<void>;
 		};
 	};
 	DB?: D1Database;

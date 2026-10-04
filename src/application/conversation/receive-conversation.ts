@@ -20,7 +20,7 @@ export function receiveConversation(
 			await store.reset(message.eventId, message.occurredAt, now());
 			await sender.reply(
 				message.replyToken,
-				"会話履歴と要約を削除しました。LINE上のメッセージは残ります。",
+				"会話履歴と要約を削除しました。長期記憶の削除も処理します。登録した通知とLINE上のメッセージは残ります。",
 			);
 			return;
 		}

@@ -18,6 +18,30 @@ export async function processGenerationBatch(
 				typeof message.body === "object" &&
 				message.body !== null &&
 				"type" in message.body &&
+				message.body.type === "memory"
+			) {
+				const job = message.body as Record<string, unknown>;
+				if (
+					typeof job.groupId !== "string" ||
+					typeof job.token !== "string" ||
+					job.token.length > 100
+				) {
+					message.ack();
+					continue;
+				}
+				if (job.groupId === env.LINE_ALLOWED_GROUP_ID?.trim()) {
+					if (!env.CONVERSATIONS) throw new Error("Missing conversations binding");
+					await env.CONVERSATIONS.get(env.CONVERSATIONS.idFromName(job.groupId)).organize(
+						job.token,
+					);
+				}
+				message.ack();
+				continue;
+			}
+			if (
+				typeof message.body === "object" &&
+				message.body !== null &&
+				"type" in message.body &&
 				message.body.type === "reminder"
 			) {
 				const job = parseReminderJob(message.body);

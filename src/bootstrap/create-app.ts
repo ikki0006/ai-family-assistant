@@ -19,12 +19,15 @@ export interface Bindings {
 			receive(message: IncomingText): Promise<void>;
 			answer(job: GenerationJob): Promise<void>;
 			deliver(job: ReminderJob): Promise<void>;
+			scheduleMemory(now: number): Promise<void>;
+			organize(token: string): Promise<void>;
 			recordSent(id: string, text: string): Promise<void>;
 		};
 	};
 	DB?: D1Database;
 	AI?: Pick<Ai, "gateway">;
 	AI_GATEWAY_ID?: string;
+	TAVILY_API_KEY?: string;
 	LINE_CHANNEL_SECRET?: string;
 	LINE_CHANNEL_ACCESS_TOKEN?: string;
 	LINE_ALLOWED_GROUP_ID?: string;

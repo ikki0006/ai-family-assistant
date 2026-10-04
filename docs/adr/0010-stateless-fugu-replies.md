@@ -6,6 +6,8 @@ Accepted (2026-10-04)
 
 Fugu接続は[ADR-0012](0012-workers-ai-budget.md)で置き換える。QueueとLINE配送の判断は継続する。
 
+モデルは[ADR-0016](0016-gemini-flash.md)、会話・記憶は[ADR-0014](0014-conversation-sessions.md)と[ADR-0019](0019-background-memory.md)で更新。QueueとReply/Pushの判断は継続する。
+
 ## Context
 
 家族グループで疎通ができたため、記憶機能に先立ってLLMを接続する。

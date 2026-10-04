@@ -15,10 +15,14 @@ export function contextSize(value: string): number {
 		0,
 	);
 }
-export function buildContext(snapshot: ConversationSnapshot, now: number): GenerationInput {
+export function buildContext(
+	snapshot: ConversationSnapshot,
+	now: number,
+	memories = "",
+): GenerationInput {
 	const system = secretaryPrompt(now);
 	const messages: GenerationInput["messages"] = [];
-	let remaining = 8000 - contextSize(system) - 256;
+	let remaining = 8000 - contextSize(system) - 256 - contextSize(memories) - (memories ? 32 : 0);
 	for (const message of [...snapshot.messages].reverse()) {
 		const content = JSON.stringify({
 			speaker: message.speaker,
@@ -46,5 +50,6 @@ export function buildContext(snapshot: ConversationSnapshot, now: number): Gener
 			remaining -= size;
 		}
 	}
+	if (memories) messages.unshift({ role: "user", content: memories });
 	return { system, messages };
 }

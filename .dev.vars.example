@@ -8,3 +8,5 @@ LINE_ALLOWED_GROUP_ID=""
 
 # Gemini uses AI.gateway() and AI_GATEWAY_ID with Google AI Studio Stored Keys (default alias).
 # No provider API key is stored in Worker bindings.
+
+TAVILY_API_KEY=""

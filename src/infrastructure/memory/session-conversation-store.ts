@@ -2,6 +2,7 @@ import type { Session, Sessions } from "agents/sessions";
 import type {
 	ConversationMessage,
 	ConversationSnapshot,
+	MemoryBatch,
 	MemoryReference,
 } from "../../application/conversation/conversation";
 import type { ConversationStore } from "../../application/ports/conversation-store";
@@ -24,6 +25,13 @@ export class SessionConversationStore implements ConversationStore {
 		);
 		sql.exec("INSERT OR IGNORE INTO family_meta VALUES (1,0,0,0)");
 		sql.exec(
+			"CREATE TABLE IF NOT EXISTS memory_processed (id TEXT PRIMARY KEY,at INTEGER NOT NULL)",
+		);
+		sql.exec(
+			"CREATE TABLE IF NOT EXISTS memory_lease (id INTEGER PRIMARY KEY,token TEXT NOT NULL,until_at INTEGER NOT NULL,revision INTEGER NOT NULL,epoch INTEGER NOT NULL)",
+		);
+		sql.exec("CREATE TABLE IF NOT EXISTS memory_deletions (id TEXT PRIMARY KEY)");
+		sql.exec(
 			"CREATE TABLE IF NOT EXISTS family_outgoing (id TEXT PRIMARY KEY,text TEXT NOT NULL,at INTEGER NOT NULL)",
 		);
 		sql.exec(
@@ -42,6 +50,126 @@ export class SessionConversationStore implements ConversationStore {
 		);
 		sql.exec("CREATE TABLE IF NOT EXISTS family_resets (id TEXT PRIMARY KEY,at INTEGER NOT NULL)");
 	}
+	pendingMemoryDeletions(): string[] {
+		return this.sql
+			.exec<{ id: string }>("SELECT id FROM memory_deletions")
+			.toArray()
+			.map((r) => r.id);
+	}
+	finishMemoryDeletion(id: string) {
+		this.sql.exec("DELETE FROM memory_deletions WHERE id=?", id);
+	}
+	claimMemory(now: number, force = false): string | null {
+		const lease = this.sql
+			.exec<{ until_at: number }>("SELECT until_at FROM memory_lease WHERE id=1")
+			.toArray()[0];
+		if (lease && lease.until_at > now) return null;
+		const pending = this.sql
+			.exec<{ first_at: number | null }>(
+				"SELECT MIN(at) AS first_at FROM family_messages WHERE id NOT IN (SELECT id FROM memory_processed)",
+			)
+			.one().first_at;
+		const last = this.sql
+			.exec<{ last_at: number | null }>("SELECT MAX(at) AS last_at FROM family_messages")
+			.one().last_at;
+		if (
+			pending === null ||
+			last === null ||
+			(!force && now - last < 15 * 60000 && now - pending < 3600000)
+		)
+			return null;
+		const token = crypto.randomUUID();
+		const meta = this.meta();
+		this.sql.exec(
+			"INSERT OR REPLACE INTO memory_lease VALUES (1,?,?,?,?)",
+			token,
+			now + 15 * 60000,
+			meta.revision,
+			meta.epoch,
+		);
+		return token;
+	}
+	releaseMemory(token: string) {
+		this.sql.exec("DELETE FROM memory_lease WHERE token=?", token);
+	}
+	memoryLeaseValid(token: string, now: number): boolean {
+		const meta = this.meta();
+		return (
+			this.sql
+				.exec(
+					"SELECT id FROM memory_lease WHERE token=? AND until_at>? AND revision=? AND epoch=?",
+					token,
+					now,
+					meta.revision,
+					meta.epoch,
+				)
+				.toArray().length === 1
+		);
+	}
+	async memoryBatch(token: string, now: number): Promise<MemoryBatch | null> {
+		await this.prune(now);
+		if (!this.memoryLeaseValid(token, now)) return null;
+		const rows = this.sql
+			.exec<IndexRow>(
+				"SELECT * FROM family_messages WHERE id NOT IN (SELECT id FROM memory_processed) ORDER BY at,id LIMIT 100",
+			)
+			.toArray();
+		const day = rows[0]?.day;
+		if (!day) return null;
+		const selected: ConversationMessage[] = [];
+		let size = 0;
+		for (const row of rows) {
+			if (row.day !== day) break;
+			const stored = await this.session(day).getMessage(row.id);
+			if (!stored) continue;
+			const text = stored.parts
+				.filter((p) => p.type === "text")
+				.map((p) => p.text ?? "")
+				.join("\n");
+			size += new TextEncoder().encode(text).length + 200;
+			if (size > 12000 && selected.length) {
+				// Never mark a summary through a partially selected timestamp.
+				while (selected.at(-1)?.occurredAt === row.at) selected.pop();
+				break;
+			}
+			selected.push({
+				id: row.id,
+				day,
+				occurredAt: row.at,
+				role: row.role,
+				text,
+				speaker: (stored.metadata as { speaker?: string } | undefined)?.speaker ?? "unknown",
+			});
+		}
+		if (!selected.length) return null;
+		// LIMIT must not hide additional messages with the last timestamp.
+		const through = selected.at(-1)?.occurredAt ?? 0;
+		const atCount = this.sql
+			.exec<{ n: number }>(
+				"SELECT COUNT(*) AS n FROM family_messages WHERE at=? AND id NOT IN (SELECT id FROM memory_processed)",
+				through,
+			)
+			.one().n;
+		if (atCount > selected.filter((m) => m.occurredAt === through).length)
+			while (selected.at(-1)?.occurredAt === through) selected.pop();
+		if (!selected.length) return null;
+		const previous =
+			this.sql
+				.exec<{ text: string }>("SELECT text FROM family_summaries WHERE day=?", day)
+				.toArray()[0]?.text ?? "";
+		return { messages: selected, previousSummary: previous, day, ...this.meta() };
+	}
+	async completeMemory(batch: MemoryBatch, summary: string) {
+		await this.saveSummary(
+			batch.day,
+			summary,
+			batch.messages.at(-1)?.occurredAt ?? 0,
+			batch.revision,
+		);
+		for (const m of batch.messages)
+			this.sql.exec("INSERT OR IGNORE INTO memory_processed VALUES (?,?)", m.id, m.occurredAt);
+	}
+
 	recordOutgoing(id: string, text: string, now: number) {
 		this.sql.exec("INSERT OR REPLACE INTO family_outgoing VALUES (?,?,?)", id, text, now);
 	}
@@ -199,6 +327,7 @@ export class SessionConversationStore implements ConversationStore {
 		this.sql.exec("DELETE FROM family_summaries");
 	}
 	async forget(messageId: string, now: number): Promise<void> {
+		this.sql.exec("INSERT OR IGNORE INTO memory_deletions VALUES (?)", messageId);
 		this.sql.exec("INSERT OR REPLACE INTO family_tombstones VALUES (?,?)", messageId, now);
 		this.invalidate();
 		this.sql.exec("DELETE FROM family_outgoing");
@@ -214,6 +343,9 @@ export class SessionConversationStore implements ConversationStore {
 	async reset(eventId: string, occurredAt: number, now: number): Promise<void> {
 		if (this.sql.exec("SELECT id FROM family_resets WHERE id=?", eventId).toArray().length) return;
 		this.sql.exec("INSERT INTO family_resets VALUES (?,?)", eventId, now);
+		this.sql.exec("INSERT OR IGNORE INTO memory_deletions VALUES ('*')");
+		this.sql.exec("DELETE FROM memory_processed");
+		this.sql.exec("DELETE FROM memory_lease");
 		this.sql.exec(
 			"UPDATE family_meta SET epoch=epoch+1,revision=revision+1,reset_at=MAX(reset_at,?) WHERE id=1",
 			Math.max(occurredAt, now),
@@ -227,6 +359,7 @@ export class SessionConversationStore implements ConversationStore {
 		this.sql.exec("DELETE FROM family_summaries");
 	}
 	async prune(now: number): Promise<void> {
+		this.sql.exec("DELETE FROM memory_processed WHERE at<?", now - RETENTION_MS);
 		this.sql.exec("DELETE FROM family_outgoing WHERE at<?", now - RETENTION_MS);
 		const rows = this.sql
 			.exec<IndexRow>(

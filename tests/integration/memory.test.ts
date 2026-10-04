@@ -6,6 +6,7 @@ import {
 	RETENTION_MS,
 	SessionConversationStore,
 } from "../../src/infrastructure/memory/session-conversation-store";
+import { reserveSearch } from "../../src/infrastructure/search/search-quota";
 const namespace = (
 	env as unknown as { CONVERSATIONS: DurableObjectNamespace<FamilyConversationAgent> }
 ).CONVERSATIONS;
@@ -244,5 +245,19 @@ it("recovers a deletion interrupted after recording its tombstone", async () => 
 		await store.prune(now + 3);
 		expect(await instance.sessions.session("2026-10-04").getMessage("a")).toBeNull();
 		expect(await instance.sessions.session("2026-10-04").getMessage("derived")).toBeNull();
+	});
+});
+
+it("caps search attempts at 900 and resets only at the UTC month boundary", async () => {
+	await runInDurableObject(stub(), async (instance, state) => {
+		const sql = state.storage.sql;
+		expect(reserveSearch(sql, now)).toBe(true);
+		sql.exec("UPDATE search_usage SET count=899");
+		expect(reserveSearch(sql, now)).toBe(true);
+		expect(reserveSearch(sql, now)).toBe(false);
+		const store = new SessionConversationStore(sql, instance.sessions);
+		await store.reset("reset-quota", now, now);
+		expect(reserveSearch(sql, now)).toBe(false);
+		expect(reserveSearch(sql, Date.parse("2026-11-01T00:00:00Z"))).toBe(true);
 	});
 });

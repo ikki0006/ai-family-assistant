@@ -20,3 +20,11 @@ export interface ConversationSnapshot {
 	messages: ConversationMessage[];
 	summaries: { day: string; text: string; through: number }[];
 }
+
+export interface MemoryBatch {
+	messages: ConversationMessage[];
+	previousSummary: string;
+	day: string;
+	revision: number;
+	epoch: number;
+}

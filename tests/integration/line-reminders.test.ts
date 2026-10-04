@@ -264,3 +264,17 @@ it("executes a model plan before confirming and prevents passive implicit creati
 		},
 	);
 });
+
+it("sends the saved action sentence without losing drop-off versus collection intent", async () => {
+	const title = "クリーニングを出しに行く時間ですよ。";
+	const r = await repo.create(group, "action-sentence", title, { kind: "once", at: now });
+	const sender = { push: vi.fn().mockResolvedValue(undefined) };
+	await deliverReminder(
+		repo,
+		sender,
+		{ type: "reminder", groupId: group, id: r.id, version: r.version, at: now },
+		group,
+		now,
+	);
+	expect(sender.push.mock.calls[0]?.[1]).toBe(`🔔 ${title}`);
+});

@@ -1,34 +1,47 @@
 # Architecture Decision Records
 
-設計判断の理由と制約を記録する。
-実装手順はルートのREADME、全体構成は[architecture.md](../architecture.md)に置く。
+ADRは「なぜそう決めたか」を残す履歴。現在の構成は[アーキテクチャ](../architecture.md)、操作・配備は[README](../../README.md)、詳細な記憶処理は[記憶仕様](../memory.md)を参照する。
+Acceptedは設計の採用を示し、本番配備の完了は意味しない。配備状況は[残タスク](../remaining-tasks.md)で管理する。
 
-| ADR | 内容 | 状態 |
+## 現在の判断を探す
+
+| 分野 | 基本となるADR | 補足・更新 |
 | --- | --- | --- |
-| [0001](0001-clean-architecture.md) | 当初のdomain層を含む構成 | Superseded by 0005 |
-| [0002](0002-development-tooling.md) | pnpm、Biome、Vite、テスト基盤 | Accepted |
-| [0003](0003-terraform-ownership.md) | Terraformと開発ツールの管理範囲 | Superseded by 0007 |
-| [0004](0004-memory-and-privacy-boundaries.md) | 記憶と個人情報処理の境界 | Accepted |
-| [0005](0005-small-application-boundaries.md) | domain層を省き、処理と外部接続を分離 | Accepted |
-| [0006](0006-line-connection-check.md) | メンションによるLINE疎通確認 | Accepted |
-| [0007](0007-manual-app-deployment.md) | Terraformと手動起動のアプリ配備を分離 | Superseded by 0008 |
-| [0008](0008-workers-builds-and-provisioned-resources.md) | Workers BuildsとDB・Queueの先行作成 | Accepted |
-| [0009](0009-group-only-access.md) | 家族グループ限定のアクセス | Accepted |
-| [0010](0010-stateless-fugu-replies.md) | Queue経由のFugu応答とReply/Push切替 | Accepted |
-| [0011](0011-garbage-reminders.md) | D1の収集設定と定期Push | Accepted |
-| [0012](0012-workers-ai-budget.md) | Workers AIとGatewayによる予算制限 | Accepted |
-| [0013](0013-shared-core.md) | 層に依存しない共通定義の配置 | Accepted |
+| レイヤーと共通型 | [0005: 小さなアプリの境界](0005-small-application-boundaries.md) | [0013: core](0013-shared-core.md)、[0015: 通知domain](0015-line-reminders.md) |
+| 開発・配備 | [0002: 開発ツール](0002-development-tooling.md) | [0008: TerraformとWorkers Builds](0008-workers-builds-and-provisioned-resources.md) |
+| LINEとアクセス制御 | [0009: 家族グループ限定](0009-group-only-access.md) | [0010: Reply/Push](0010-stateless-fugu-replies.md)、[0015: 引用返信・参加条件](0015-line-reminders.md) |
+| AIと検索 | [0016: GeminiとBYOK](0016-gemini-flash.md) | [0012: 予算](0012-workers-ai-budget.md)、[0017: Tavily](0017-tavily-search.md) |
+| 会話・記憶・削除 | [0019: 非同期整理と長期記憶](0019-background-memory.md) | [0014: Sessions](0014-conversation-sessions.md)、[0004: 個人情報の境界](0004-memory-and-privacy-boundaries.md) |
+| 定期通知 | [0015: LINEからの通知管理](0015-line-reminders.md) | [0011: ゴミ出し](0011-garbage-reminders.md) |
 
-| [0014](0014-conversation-sessions.md) | Sessionsによる短期会話・要約・削除 | Accepted |
+## 判断の履歴
 
-新規の判断は[template.md](template.md)を使い、4桁の番号とkebab-caseの名前を付ける。
-状態はProposed、Accepted、Deprecated、Supersededから選ぶ。
-判断を覆す場合は新しいADRを追加し、旧ADRから参照する。
-`pnpm adr:lint`で必須見出しと番号の重複を検査する。
+番号・ファイル名は参照を壊さないため変更しない。一部の判断だけ更新されたADRは、残る判断も併記する。
 
-既存プロジェクト`recruta-ai-interview`のADR運用を参考にした。
-このプロジェクトでは依存方向の検査にdependency-cruiserを使い、ADRに対応する検査コマンドを記載する。
+| ADR | 判断 | 状態・後続 |
+| --- | --- | --- |
+| [0001](0001-clean-architecture.md) | 当初のdomain層を含む構成 | 0005で置換 |
+| [0002](0002-development-tooling.md) | pnpm・Biome・テスト基盤 | 採用 |
+| [0003](0003-terraform-ownership.md) | Terraformの管理範囲 | 0007→0008で更新 |
+| [0004](0004-memory-and-privacy-boundaries.md) | 記憶と個人情報の境界 | 採用。保存・削除の具体化は0014→0019 |
+| [0005](0005-small-application-boundaries.md) | 小さなアプリのレイヤー | 採用。通知domainは0015で追加 |
+| [0006](0006-line-connection-check.md) | LINE疎通確認 | 疎通手順。許可条件は0009、応答条件は0015で更新 |
+| [0007](0007-manual-app-deployment.md) | 手動起動の配備 | 0008で置換 |
+| [0008](0008-workers-builds-and-provisioned-resources.md) | Workers BuildsとTerraform | 採用 |
+| [0009](0009-group-only-access.md) | 家族グループ限定 | 採用 |
+| [0010](0010-stateless-fugu-replies.md) | Fugu・Queue・Reply/Push | Queueと配信方式は継続。モデルは0016、会話は0014→0019へ |
+| [0011](0011-garbage-reminders.md) | D1の収集設定とPush | 採用 |
+| [0012](0012-workers-ai-budget.md) | Gatewayと推論予算 | 予算は継続。モデル・課金経路は0016へ |
+| [0013](0013-shared-core.md) | 層に依存しないcore | 採用 |
+| [0014](0014-conversation-sessions.md) | Sessionsの短期履歴 | 保存基盤は継続。要約タイミング・長期記憶・削除範囲は0019へ |
+| [0015](0015-line-reminders.md) | LINE通知管理と5分Cron | 採用 |
+| [0016](0016-gemini-flash.md) | GeminiをBYOKで呼ぶ | 採用 |
+| [0017](0017-tavily-search.md) | 必要時だけTavily検索 | 採用 |
+| [0019](0019-background-memory.md) | 非同期整理・長期記憶・一覧 | 採用 |
 
-- [ADR-0015: LINEから通知を管理し5分間隔で実行する](0015-line-reminders.md)
+## 書き方
 
-- [ADR-0016: Gemini 3.8 Flashを既存Gateway経由で使う](0016-gemini-flash.md)
+[template.md](template.md)の5項目を使い、判断・理由・主要な制約を簡潔に書く。
+コマンドや閾値の詳細はREADMEや機能別仕様へ置き、ADRからリンクする。
+判断を変える場合は新しいADRを追加し、旧ADRに後続へのリンクを付ける。歴史的な判断を現在の実装に書き換えない。
+`pnpm adr:lint`で必須項目と番号の重複を検査する。

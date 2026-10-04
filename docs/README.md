@@ -8,6 +8,7 @@
 | 初回構築、Secrets、LINE設定、Workers Builds、DB更新 | [配備・運用](deployment.md) |
 | 実行ログ、疎通や通知の障害調査 | [トラブルシュート](troubleshooting.md) |
 | モデル接続、費用・予算、Web検索 | [AI運用](ai.md) |
+| 名前・呼び名の本人確認と削除 | [家族プロフィール](profiles.md) |
 | 会話・長期記憶の保存、整理、一覧、削除 | [記憶](memory.md) |
 | 予定の質問、繰り返し通知、ゴミ収集設定 | [予定・通知](reminders.md) |
 | 改善依頼、承認、GitHub設定、修正できる範囲 | [自己改善](improvements.md) |

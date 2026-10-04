@@ -45,6 +45,8 @@ Acceptedは設計の採用を示し、本番配備の完了は意味しない。
 
 | [0021](0021-conversation-tools-and-improvements.md) | 必要時の予定参照・自然文の改善受付 | 採用 |
 
+| [0022](0022-family-profiles.md) | 自動失効しない本人確認付きプロフィール | 採用 |
+
 ## 書き方
 
 [template.md](template.md)の5項目を使い、判断・理由・主要な制約を簡潔に書く。

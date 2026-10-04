@@ -1,6 +1,7 @@
 import { env } from "cloudflare:workers";
 import { beforeAll, beforeEach, expect, it, vi } from "vitest";
 import migration from "../../migrations/0002_garbage_reminders.sql?raw";
+import profileMigration from "../../migrations/0007_family_profiles.sql?raw";
 import { runGarbageReminder } from "../../src/bootstrap/run-garbage-reminder";
 
 const db = (env as unknown as { DB: D1Database }).DB;
@@ -19,6 +20,7 @@ const config = {
 };
 
 beforeAll(async () => {
+	await (env as unknown as { DB: D1Database }).DB.exec(profileMigration.replace(/\n/g, " "));
 	await db.exec(migration.replace(/--[^\n]*/g, "").replace(/\n/g, " "));
 });
 beforeEach(async () => {

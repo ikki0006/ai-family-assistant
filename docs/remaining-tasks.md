@@ -44,3 +44,10 @@
 - [記憶機能の配備](releases/2026-10-04-memory.md)
 - [自己改善の初回配備・PR試験](releases/2026-10-04-improvements.md)
 - [周期拡張と予定参照の配備](releases/2026-10-04-conversation-tools.md)
+
+## 家族プロフィール
+
+- [x] D1保存、非同期の候補抽出、本人の版付き承認、明示登録・訂正・削除を実装。
+- [x] 本番D1へmigration 0007を適用。
+- [ ] push後のWorkers Builds完了とWorkerへの反映確認。
+- [ ] LINEで自己紹介→候補確認→承認→呼び名付き回答・訂正・削除を確認。

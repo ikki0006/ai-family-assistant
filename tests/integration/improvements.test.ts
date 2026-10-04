@@ -1,11 +1,13 @@
 import { env } from "cloudflare:workers";
 import { beforeAll, beforeEach, expect, it } from "vitest";
 import migration from "../../migrations/0004_improvements.sql?raw";
+import profileMigration from "../../migrations/0007_family_profiles.sql?raw";
 import { createImprovementRepository } from "../../src/infrastructure/persistence/d1/improvement-repository";
 
 const db = (env as unknown as { DB: D1Database }).DB;
 const repository = createImprovementRepository(db);
 beforeAll(async () => {
+	await (env as unknown as { DB: D1Database }).DB.exec(profileMigration.replace(/\n/g, " "));
 	await db.exec(migration.replace(/\n/g, " "));
 });
 beforeEach(async () => {

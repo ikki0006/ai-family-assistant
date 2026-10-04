@@ -4,6 +4,7 @@ import previousMigration from "../../migrations/0002_garbage_reminders.sql?raw";
 import migration from "../../migrations/0003_reminders.sql?raw";
 import memoryMigration from "../../migrations/0005_long_term_memories.sql?raw";
 import calendarMigration from "../../migrations/0006_calendar_reminders.sql?raw";
+import profileMigration from "../../migrations/0007_family_profiles.sql?raw";
 import { deliverReminder } from "../../src/application/reminders/deliver-reminder";
 import { manageReminders } from "../../src/application/reminders/manage-reminders";
 import { dispatchReminders } from "../../src/bootstrap/dispatch-reminders";
@@ -13,6 +14,7 @@ const group = `C${"1".repeat(32)}`;
 const repo = createReminderRepository(db);
 const now = Date.parse("2026-10-04T08:00:00Z");
 beforeAll(async () => {
+	await (env as unknown as { DB: D1Database }).DB.exec(profileMigration.replace(/\n/g, " "));
 	await db.exec(memoryMigration.replace(/\n/g, " "));
 	await db.exec(previousMigration.replace(/--[^\n]*/g, "").replace(/\n/g, " "));
 	await db.exec(migration.replace(/\n/g, " "));
@@ -394,6 +396,18 @@ it("lists and edits annual recurrence without losing leap day or interval", asyn
 });
 
 it("loads collection rules only for the read-only inspect tool and includes them in answers", async () => {
+	const { createFamilyProfiles } = await import(
+		"../../src/infrastructure/persistence/d1/family-profiles"
+	);
+	const profiles = createFamilyProfiles(db);
+	await profiles.propose(group, {
+		speaker: `U${"1".repeat(32)}`,
+		names: ["架空太郎"],
+		sourceIds: ["intro"],
+		occurredAt: 1,
+	});
+	await profiles.confirm(group, `U${"1".repeat(32)}`, 1);
+
 	const { runInDurableObject } = await import("cloudflare:test");
 	const { SessionConversationStore } = await import(
 		"../../src/infrastructure/memory/session-conversation-store"
@@ -464,6 +478,8 @@ it("loads collection rules only for the read-only inspect tool and includes them
 						memory: ref ?? { messageId: "q", epoch: -1 },
 					});
 					expect(requests).toHaveLength(2);
+					expect(requests[0]).toContain("架空太郎");
+					expect(requests[1]).toContain("架空太郎");
 					if (action === "inspect") expect(requests[1]).toContain("不燃ごみ");
 					else expect(requests[1]).not.toContain("不燃ごみ");
 					expect(await repo.list(group)).toEqual([]);

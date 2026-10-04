@@ -340,6 +340,9 @@ export class SessionConversationStore implements ConversationStore {
 			this.sql.exec("DELETE FROM family_messages WHERE id=?", row.id);
 		}
 	}
+	requestProfileClear() {
+		this.sql.exec("INSERT OR IGNORE INTO memory_deletions VALUES ('profiles:*')");
+	}
 	async reset(eventId: string, occurredAt: number, now: number): Promise<void> {
 		if (this.sql.exec("SELECT id FROM family_resets WHERE id=?", eventId).toArray().length) return;
 		this.sql.exec("INSERT INTO family_resets VALUES (?,?)", eventId, now);

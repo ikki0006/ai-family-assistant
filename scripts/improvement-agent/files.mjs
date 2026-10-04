@@ -1,6 +1,15 @@
 import { lstat, mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import { dirname, resolve, sep } from "node:path";
 
+export function allowedPath(path) {
+	return (
+		typeof path === "string" &&
+		/^(src\/(?:application|domain|core|bootstrap|infrastructure)\/(?:[a-z0-9-]+\/)*[a-z0-9-]+\.ts|tests\/(?:unit|integration)\/[a-z0-9-]+\.test\.ts)$/.test(
+			path,
+		)
+	);
+}
+
 export function validateFiles(value) {
 	if (!Array.isArray(value) || value.length < 1 || value.length > 5)
 		throw new Error("Expected 1–5 files");
@@ -13,12 +22,7 @@ export function validateFiles(value) {
 			file.content.length > 30000
 		)
 			throw new Error("Invalid file");
-		if (
-			!/^(src\/application\/prompts\/[a-z0-9-]+\.ts|tests\/unit\/[a-z0-9-]+\.test\.ts)$/.test(
-				file.path,
-			)
-		)
-			throw new Error("Path outside improvement scope");
+		if (!allowedPath(file.path)) throw new Error("Path outside improvement scope");
 		if (paths.has(file.path)) throw new Error("Duplicate file");
 		paths.add(file.path);
 	}

@@ -69,3 +69,12 @@ describe("improvement approval", () => {
 		expect(body.inputs.request_id).toBe(id);
 	});
 });
+
+it("accepts natural PR requests as proposals without dispatching", async () => {
+	const deps = setup();
+	const text = "ゴミの予定をDBから参照できるように改良してプルリク上げて";
+	expect(await handleImprovement({ ...input, text }, deps)).toContain("改善承認");
+	expect(deps.repository.create).toHaveBeenCalledWith("group", "event", text);
+	expect(deps.dispatcher.dispatch).not.toHaveBeenCalled();
+	expect(await handleImprovement({ ...input, text: "明日ごみを出して" }, deps)).toBeNull();
+});

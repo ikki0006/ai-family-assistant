@@ -4,6 +4,8 @@
 
 Accepted (2026-10-04)
 
+受付と変更対象は[ADR-0021](0021-conversation-tools-and-improvements.md)で更新。
+
 ## Context
 
 家族の要望から小さな改善PRを作りたい。Workerには対象リポジトリのActions:writeのみを渡し、実装は既存Geminiを従量課金で使い、追加サブスクリプションを契約しない。

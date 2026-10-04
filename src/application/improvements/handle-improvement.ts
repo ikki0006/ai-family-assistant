@@ -1,5 +1,20 @@
 import type { ImprovementDispatcher, ImprovementRepository } from "../ports/improvement-repository";
 
+export function improvementSpecification(text: string): string | null {
+	const t = text.trim();
+	const command = /^(?:改善|改良)[:：]\s*([\s\S]+)$/.exec(t);
+	if (command) return command[1]?.trim() ?? null;
+	// Proposals never dispatch. Ambiguous requests still get a confirmation first.
+	if (
+		/(?:改善|改良|修正|実装|変更)(?:して|してください|してほしい)/.test(t) &&
+		/(?:プルリク(?:エスト)?|PR)(?:を)?(?:作|出|上げ|あげ)/i.test(t)
+	)
+		return t;
+	return null;
+}
+export function isImprovementRequest(text: string): boolean {
+	return improvementSpecification(text) !== null || /^改善承認(?:\s|$)/.test(text.trim());
+}
 export async function handleImprovement(
 	input: { text: string; groupId: string; eventId: string },
 	dependencies: {
@@ -8,9 +23,8 @@ export async function handleImprovement(
 	},
 ): Promise<string | null> {
 	const text = input.text.trim();
-	const proposal = /^改善[:：]\s*([\s\S]+)$/.exec(text);
-	if (proposal) {
-		const specification = proposal[1]?.trim() ?? "";
+	const specification = improvementSpecification(text);
+	if (specification !== null) {
 		if (specification.length < 5 || specification.length > 2000) {
 			return "改善内容は5〜2000文字で指定してください。個人情報は含めないでください。";
 		}
@@ -19,7 +33,7 @@ export async function handleImprovement(
 			input.eventId,
 			specification,
 		);
-		return `改善 #${request.id}（版 ${request.version}）\n${request.specification}\n\nこの内容をGitHubと実装AIへ渡し、プロンプト・単体テストの小さな変更としてDraft PRを作ります。自動mergeはしません。\n承認する場合: 改善承認 ${request.id} ${request.version}`;
+		return `改善 #${request.id}（版 ${request.version}）\n${request.specification}\n\nこの内容をGitHubと実装AIへ渡し、アプリコード・テストの小さな変更としてDraft PRを作ります。自動mergeはしません。\n承認する場合: 改善承認 ${request.id} ${request.version}`;
 	}
 	const approval = /^改善承認\s+([a-f0-9-]{36})\s+(\d+)$/.exec(text);
 	if (!approval) return null;

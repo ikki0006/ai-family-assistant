@@ -8,7 +8,16 @@ import {
 import type { Recurrence, Reminder, Schedule } from "../../domain/reminders/recurrence";
 import type { ReminderRepository } from "../ports/reminder-repository";
 export type ReminderAction = Partial<Recurrence> & {
-	action: "none" | "clarify" | "list" | "create" | "update" | "pause" | "resume" | "delete";
+	action:
+		| "none"
+		| "clarify"
+		| "inspect"
+		| "list"
+		| "create"
+		| "update"
+		| "pause"
+		| "resume"
+		| "delete";
 	question?: string;
 	id?: string;
 	version?: number;
@@ -26,9 +35,17 @@ export function parseReminderAction(raw: string): ReminderAction {
 		throw new Error("Invalid action");
 	const o = value as Record<string, unknown>;
 	if (
-		!["none", "clarify", "list", "create", "update", "pause", "resume", "delete"].includes(
-			String(o.action),
-		)
+		![
+			"none",
+			"clarify",
+			"inspect",
+			"list",
+			"create",
+			"update",
+			"pause",
+			"resume",
+			"delete",
+		].includes(String(o.action))
 	)
 		throw new Error("Invalid action");
 	for (const key of ["question", "id", "title", "at"])
@@ -63,7 +80,7 @@ export async function manageReminders(
 	action: ReminderAction,
 	now: number,
 ): Promise<string | null> {
-	if (action.action === "none") return null;
+	if (action.action === "none" || action.action === "inspect") return null;
 	if (action.action === "clarify") return action.question || "通知の内容と日時を教えてください。";
 	if (action.action === "list") {
 		const rows = await repo.list(group);

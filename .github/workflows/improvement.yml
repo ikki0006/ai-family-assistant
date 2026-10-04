@@ -106,7 +106,7 @@ jobs:
           git switch -c "$branch"
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add src/application/prompts tests/unit
+          git add src/application src/domain src/core src/bootstrap src/infrastructure tests/unit tests/integration
           git diff --cached --quiet && exit 0
           node scripts/improvement-agent/pr-description.mjs "$RUNNER_TEMP/improvement/improvement-files.json" "$RUNNER_TEMP/improvement-title.txt" "$RUNNER_TEMP/improvement-body.md"
           git commit -F "$RUNNER_TEMP/improvement-title.txt"

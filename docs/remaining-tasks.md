@@ -55,3 +55,9 @@ AI Gatewayの予算は31日40 USD・24時間2 USD。Geminiの料金はGoogle側�
 - [x] migration 0004とWorkflowを反映、Worker `fbc51d37-ff57-49c0-afa8-9beae347a66d`を配備。health 200。
 - [x] 専用トークンの実dispatch→Gemini生成→全検証→[Draft PR #1](https://github.com/ikki0006/ai-family-assistant/pull/1)作成成功。
 - [ ] LINEから実際に要望・承認を送る操作を確認する（試験でLINEメッセージは送信していない）。
+
+## 会話の予定参照・改善受付の修正
+
+- [x] 必要時だけinspectでDBの予定を参照。自然文の改善＋PR依頼を確認へ接続。アプリ内部TSと統合テストへ自動改善の範囲を拡張。
+- [x] 158テスト成功。Worker `b15e7916-8387-44d8-bcd4-ed28ec81801b`を配備。schema変更なし。
+- [ ] LINEの自然文でゴミ収集質問と改善確認を実機確認。拡張した変更範囲での実生成・Draft PR作成は未実測。

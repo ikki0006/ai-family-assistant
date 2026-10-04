@@ -2,6 +2,7 @@ import { env } from "cloudflare:workers";
 import { beforeAll, beforeEach, expect, it, vi } from "vitest";
 import previousMigration from "../../migrations/0002_garbage_reminders.sql?raw";
 import migration from "../../migrations/0003_reminders.sql?raw";
+import memoryMigration from "../../migrations/0005_long_term_memories.sql?raw";
 import calendarMigration from "../../migrations/0006_calendar_reminders.sql?raw";
 import { deliverReminder } from "../../src/application/reminders/deliver-reminder";
 import { manageReminders } from "../../src/application/reminders/manage-reminders";
@@ -12,6 +13,7 @@ const group = `C${"1".repeat(32)}`;
 const repo = createReminderRepository(db);
 const now = Date.parse("2026-10-04T08:00:00Z");
 beforeAll(async () => {
+	await db.exec(memoryMigration.replace(/\n/g, " "));
 	await db.exec(previousMigration.replace(/--[^\n]*/g, "").replace(/\n/g, " "));
 	await db.exec(migration.replace(/\n/g, " "));
 	await db
@@ -389,4 +391,85 @@ it("lists and edits annual recurrence without losing leap day or interval", asyn
 		),
 	).toContain("確認");
 	expect(await repo.get(group, "invalid")).toBeNull();
+});
+
+it("loads collection rules only for the read-only inspect tool and includes them in answers", async () => {
+	const { runInDurableObject } = await import("cloudflare:test");
+	const { SessionConversationStore } = await import(
+		"../../src/infrastructure/memory/session-conversation-store"
+	);
+	const namespace = (
+		env as unknown as {
+			CONVERSATIONS: DurableObjectNamespace<
+				import("../../src/bootstrap/family-conversation-agent").FamilyConversationAgent
+			>;
+		}
+	).CONVERSATIONS;
+	await db
+		.prepare("INSERT OR REPLACE INTO garbage_schedule(id,config_json) VALUES(1,?)")
+		.bind(
+			JSON.stringify({
+				validFrom: "2026-01-01",
+				validThrough: "2027-12-31",
+				rules: [{ label: "不燃ごみ", weekday: 2, weeks: [1, 3] }],
+				overrides: {},
+			}),
+		)
+		.run();
+	for (const action of ["none", "inspect"])
+		await runInDurableObject(
+			namespace.get(namespace.idFromName(crypto.randomUUID())),
+			async (instance, state) => {
+				const requests: string[] = [];
+				const run = vi.fn().mockImplementation(async (input) => {
+					requests.push(JSON.stringify(input));
+					const text = requests.length === 1 ? JSON.stringify({ action }) : "確認しました。";
+					return Response.json({
+						candidates: [{ finishReason: "STOP", content: { parts: [{ text }] } }],
+					});
+				});
+				Object.defineProperty(instance, "env", {
+					value: {
+						DB: db,
+						LINE_ALLOWED_GROUP_ID: group,
+						LINE_CHANNEL_ACCESS_TOKEN: "test",
+						AI: { gateway: () => ({ run }) },
+						AI_GATEWAY_ID: "test",
+					},
+					configurable: true,
+				});
+				const store = new SessionConversationStore(state.storage.sql, instance.sessions);
+				const now = Date.now();
+				const ref = await store.append(
+					{
+						id: "q",
+						role: "user",
+						speaker: "fictional",
+						text: "不燃はいつ？",
+						occurredAt: now,
+						day: new Date(now).toISOString().slice(0, 10),
+					},
+					"q",
+					now,
+				);
+				const original = globalThis.fetch;
+				globalThis.fetch = async () => Response.json({ sentMessages: [{ id: "answer" }] });
+				try {
+					await instance.answer({
+						eventId: "q",
+						groupId: group,
+						text: "",
+						replyToken: "r",
+						receivedAt: now,
+						memory: ref ?? { messageId: "q", epoch: -1 },
+					});
+					expect(requests).toHaveLength(2);
+					if (action === "inspect") expect(requests[1]).toContain("不燃ごみ");
+					else expect(requests[1]).not.toContain("不燃ごみ");
+					expect(await repo.list(group)).toEqual([]);
+				} finally {
+					globalThis.fetch = original;
+				}
+			},
+		);
 });

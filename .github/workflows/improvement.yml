@@ -64,7 +64,8 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: improvement-files
-      - run: node scripts/improvement-agent/apply.mjs improvement-files.json
+          path: ${{ runner.temp }}/improvement
+      - run: node scripts/improvement-agent/apply.mjs "$RUNNER_TEMP/improvement/improvement-files.json"
       - name: Verify without AI or production secrets
         run: pnpm verify
   publish:
@@ -84,7 +85,8 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: improvement-files
-      - run: node scripts/improvement-agent/apply.mjs improvement-files.json
+          path: ${{ runner.temp }}/improvement
+      - run: node scripts/improvement-agent/apply.mjs "$RUNNER_TEMP/improvement/improvement-files.json"
       - name: Create draft PR without executing generated code
         shell: bash
         env:

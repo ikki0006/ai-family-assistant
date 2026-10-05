@@ -1,5 +1,6 @@
 import type { Diagnostics } from "../../application/ports/diagnostics";
 import type { ReplySender } from "../../application/ports/reply-sender";
+import { textMessage } from "./text-message";
 
 export class LineReplyError extends Error {
 	constructor(readonly status: number) {
@@ -14,14 +15,14 @@ export function createLineReplySender(
 	onSent?: (id: string, text: string) => Promise<void>,
 ): ReplySender {
 	return {
-		async reply(replyToken, text) {
+		async reply(replyToken, text, choices) {
 			const response = await fetcher("https://api.line.me/v2/bot/message/reply", {
 				method: "POST",
 				headers: {
 					authorization: `Bearer ${accessToken}`,
 					"content-type": "application/json",
 				},
-				body: JSON.stringify({ replyToken, messages: [{ type: "text", text }] }),
+				body: JSON.stringify({ replyToken, messages: [textMessage(text, choices)] }),
 				signal: AbortSignal.timeout(5000),
 			}).catch((error: unknown) => {
 				diagnostics?.failure("line_transport_failed");

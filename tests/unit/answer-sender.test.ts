@@ -73,3 +73,22 @@ it("treats an already accepted Push retry as delivered", async () => {
 		createLineAnswerSender("token", job, fetcher, undefined, () => 90_000).reply("reply", "answer"),
 	).resolves.toBeUndefined();
 });
+
+it("preserves quick replies when an expired reply token falls back to push", async () => {
+	const fetcher = vi
+		.fn<typeof fetch>()
+		.mockResolvedValueOnce(new Response("", { status: 400 }))
+		.mockResolvedValueOnce(new Response("{}"));
+	const choices = [{ label: "はい", data: "qr:test", displayText: "はい" }];
+	await createLineAnswerSender("token", job, fetcher, undefined, () => 2000).reply(
+		"reply",
+		"確認？",
+		choices,
+	);
+	expect(fetcher.mock.calls).toHaveLength(2);
+	for (const [, init] of fetcher.mock.calls)
+		expect(JSON.parse(String(init?.body)).messages[0].quickReply.items[0].action).toEqual({
+			type: "postback",
+			...choices[0],
+		});
+});

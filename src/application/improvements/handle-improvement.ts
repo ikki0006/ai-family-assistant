@@ -1,4 +1,8 @@
-import type { ImprovementDispatcher, ImprovementRepository } from "../ports/improvement-repository";
+import type {
+	Improvement,
+	ImprovementDispatcher,
+	ImprovementRepository,
+} from "../ports/improvement-repository";
 
 export function improvementSpecification(text: string): string | null {
 	const t = text.trim();
@@ -20,6 +24,7 @@ export async function handleImprovement(
 	dependencies: {
 		repository: ImprovementRepository;
 		dispatcher: ImprovementDispatcher;
+		onProposal?: (request: Improvement) => void;
 	},
 ): Promise<string | null> {
 	const text = input.text.trim();
@@ -33,7 +38,8 @@ export async function handleImprovement(
 			input.eventId,
 			specification,
 		);
-		return `改善 #${request.id}（版 ${request.version}）\n${request.specification}\n\nこの内容をGitHubと実装AIへ渡し、アプリコード・テストの小さな変更としてDraft PRを作ります。自動mergeはしません。\n承認する場合: 改善承認 ${request.id} ${request.version}`;
+		dependencies.onProposal?.(request);
+		return `変更内容を確認してください。\n\n${request.specification}\n\nこの内容をGitHubと実装AIへ渡し、アプリコード・テストの小さな変更としてDraft PRを作ります。自動マージはしません。\n下の「承認してPR作成」か「キャンセル」を選んでください。`;
 	}
 	const approval = /^改善承認\s+([a-f0-9-]{36})\s+(\d+)$/.exec(text);
 	if (!approval) return null;
@@ -41,16 +47,16 @@ export async function handleImprovement(
 	const version = Number(approval[2]);
 	const request = await dependencies.repository.get(input.groupId, id);
 	if (!request || request.version !== version)
-		return "その改善依頼・版が見つかりません。確認メッセージのIDと版を指定してください。";
+		return "その改善依頼は確認できません。改善内容をもう一度送ってください。";
 	if (!(await dependencies.repository.claim(input.groupId, id, version))) {
 		return "この依頼はすでに実行依頼済みです。GitHub Actionsの実行履歴を確認してください。";
 	}
 	try {
 		await dependencies.dispatcher.dispatch(request);
 		await dependencies.repository.finish(input.groupId, id, "dispatched");
-		return `改善 #${id} の実装を依頼しました。GitHub Actionsで検証後、Draft PRを作成します。失敗時はPRを作りません。`;
+		return "確認した内容の実装を依頼しました。GitHub Actionsで検証後、Draft PRを作成します。失敗時はPRを作りません。";
 	} catch {
 		await dependencies.repository.finish(input.groupId, id, "uncertain");
-		return `改善 #${id} の実行受付を確認できませんでした。重複実行を避けるため自動再送しません。GitHub Actionsの実行履歴を確認してください。`;
+		return "実行受付を確認できませんでした。重複実行を避けるため自動再送しません。GitHub Actionsの実行履歴を確認してください。";
 	}
 }

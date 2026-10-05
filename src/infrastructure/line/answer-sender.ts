@@ -14,11 +14,11 @@ export function createLineAnswerSender(
 ): ReplySender {
 	const replySender = createLineReplySender(accessToken, fetcher, diagnostics, onSent);
 	return {
-		async reply(_replyToken, text) {
+		async reply(_replyToken, text, choices) {
 			// Leave margin for LINE transport and token expiry.
 			if (now() - job.receivedAt < 45_000) {
 				try {
-					await replySender.reply(job.replyToken, text);
+					await replySender.reply(job.replyToken, text, choices);
 					return;
 				} catch (error) {
 					// Only a definite rejection falls back; ambiguous failures could duplicate replies.
@@ -29,6 +29,7 @@ export function createLineAnswerSender(
 				job.groupId,
 				text,
 				job.eventId,
+				choices,
 			);
 		},
 	};

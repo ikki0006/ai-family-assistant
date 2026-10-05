@@ -8,6 +8,7 @@ export type Improvement = {
 export interface ImprovementRepository {
 	create(groupId: string, eventId: string, specification: string): Promise<Improvement>;
 	get(groupId: string, id: string): Promise<Improvement | null>;
+	cancel(groupId: string, id: string, version: number): Promise<boolean>;
 	claim(groupId: string, id: string, version: number): Promise<boolean>;
 	finish(groupId: string, id: string, status: "dispatched" | "uncertain"): Promise<void>;
 }

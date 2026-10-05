@@ -37,3 +37,94 @@ it("rejects expired approvals and isolates groups", async () => {
 		.run();
 	expect(await repository.claim("group", row.id, 1)).toBe(false);
 });
+
+it("approves a displayed proposal by postback once, and cancellation prevents approval", async () => {
+	const { runInDurableObject } = await import("cloudflare:test");
+	const { QuickReplies } = await import("../../src/infrastructure/memory/quick-replies");
+	const ns = (
+		env as unknown as {
+			CONVERSATIONS: DurableObjectNamespace<
+				import("../../src/bootstrap/family-conversation-agent").FamilyConversationAgent
+			>;
+		}
+	).CONVERSATIONS;
+	await runInDurableObject(ns.get(ns.idFromName(crypto.randomUUID())), async (instance, state) => {
+		Object.defineProperty(instance, "env", {
+			value: {
+				DB: db,
+				LINE_ALLOWED_GROUP_ID: "group",
+				LINE_CHANNEL_ACCESS_TOKEN: "test",
+				GH_IMPROVEMENT_TOKEN: "test",
+			},
+			configurable: true,
+		});
+		const original = globalThis.fetch;
+		const messages: Array<{
+			text: string;
+			quickReply?: { items: Array<{ action: { data: string } }> };
+		}> = [];
+		let dispatched = 0;
+		globalThis.fetch = async (url, init) => {
+			if (String(url).startsWith("https://api.github.com/")) {
+				dispatched++;
+				return new Response(null, { status: 204 });
+			}
+			messages.push(JSON.parse(String(init?.body)).messages[0]);
+			return Response.json({});
+		};
+		try {
+			const base = {
+				chatType: "group" as const,
+				groupId: "group",
+				speaker: "first",
+				mentioned: true,
+				text: "改善: 回答を短くしてください",
+				replyToken: "r",
+				eventId: "proposal",
+			};
+			await instance.receive(base);
+			expect(dispatched).toBe(0);
+			expect(messages[0]?.text).toContain("回答を短くしてください");
+			const approve = messages[0]?.quickReply?.items[0]?.action.data ?? "";
+			const cancel = messages[0]?.quickReply?.items[1]?.action.data ?? "";
+			await instance.receive({
+				...base,
+				mentioned: false,
+				speaker: "second",
+				text: "",
+				eventId: "click",
+				postback: approve,
+			});
+			await instance.receive({
+				...base,
+				mentioned: false,
+				text: "",
+				eventId: "again",
+				postback: approve,
+			});
+			expect(dispatched).toBe(1);
+			expect(new QuickReplies(state.storage.sql).consume(cancel, "first", Date.now())).toBeNull();
+			await instance.receive({ ...base, eventId: "other-proposal" });
+			const last = messages.at(-1);
+			const cancelledApprove = last?.quickReply?.items[0]?.action.data ?? "";
+			await instance.receive({
+				...base,
+				mentioned: false,
+				text: "",
+				eventId: "cancel",
+				postback: last?.quickReply?.items[1]?.action.data ?? "",
+			});
+			expect(messages.at(-1)?.text).toContain("キャンセルしました");
+			await instance.receive({
+				...base,
+				mentioned: false,
+				text: "",
+				eventId: "cancelled-approve",
+				postback: cancelledApprove,
+			});
+			expect(dispatched).toBe(1);
+		} finally {
+			globalThis.fetch = original;
+		}
+	});
+});

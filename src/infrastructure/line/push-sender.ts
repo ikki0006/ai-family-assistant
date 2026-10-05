@@ -1,6 +1,7 @@
 import type { Diagnostics } from "../../application/ports/diagnostics";
 import type { PushSender } from "../../application/ports/push-sender";
 import { LineReplyError } from "./reply-sender";
+import { textMessage } from "./text-message";
 
 export function createLinePushSender(
 	accessToken: string,
@@ -9,7 +10,7 @@ export function createLinePushSender(
 	onSent?: (id: string, text: string) => Promise<void>,
 ): PushSender {
 	return {
-		async push(to, text, key) {
+		async push(to, text, key, choices) {
 			const hash = new Uint8Array(
 				await crypto.subtle.digest("SHA-256", new TextEncoder().encode(key)),
 			);
@@ -24,7 +25,7 @@ export function createLinePushSender(
 					"content-type": "application/json",
 					"x-line-retry-key": retryKey,
 				},
-				body: JSON.stringify({ to: to, messages: [{ type: "text", text }] }),
+				body: JSON.stringify({ to: to, messages: [textMessage(text, choices)] }),
 				signal: AbortSignal.timeout(5000),
 			}).catch(() => {
 				diagnostics?.failure("line_transport_failed");

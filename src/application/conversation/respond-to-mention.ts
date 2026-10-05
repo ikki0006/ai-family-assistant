@@ -8,6 +8,7 @@ import type { MemoryReference } from "./conversation";
 
 export interface IncomingText {
 	eventId?: string;
+	postback?: string;
 	quotedMessageId?: string;
 	passive?: boolean;
 	messageId?: string;

@@ -43,6 +43,39 @@ export function parseWebhook(body: string): IncomingText[] | null {
 	const envelope = envelopeSchema.safeParse(parsed);
 	if (!envelope.success) return null;
 	return envelope.data.events.flatMap<IncomingText>((event) => {
+		const postback = z
+			.object({
+				type: z.literal("postback"),
+				mode: z.enum(["active", "standby"]).optional(),
+				webhookEventId: z.string().min(1).max(128),
+				timestamp: z.number().int().nonnegative(),
+				replyToken: z.string().min(1),
+				source: z.object({
+					type: z.literal("group"),
+					groupId: z.string().min(1),
+					userId: z.string().optional(),
+				}),
+				postback: z.object({ data: z.string().max(300) }),
+			})
+			.safeParse(event);
+		if (postback.success) {
+			const v = postback.data;
+			if (v.mode === "standby" || !/^qr:[a-f0-9-]{36}$/.test(v.postback.data)) return [];
+			return [
+				{
+					eventId: v.webhookEventId,
+					messageId: `postback:${v.webhookEventId}`,
+					occurredAt: v.timestamp,
+					chatType: "group",
+					groupId: v.source.groupId,
+					...(v.source.userId ? { speaker: v.source.userId } : {}),
+					mentioned: false,
+					text: "",
+					replyToken: v.replyToken,
+					postback: v.postback.data,
+				},
+			];
+		}
 		const unsend = z
 			.object({
 				type: z.literal("unsend"),

@@ -23,3 +23,5 @@ Accepted (2026-10-04)
 ## Enforcement
 
 自然文で確認のみ作成すること、inspectのパース、予定の正本・省略・識別情報の除外、変更パス制約をテストする。`pnpm verify`を実行する。
+
+承認時のID入力案内は[ADR-0023](0023-quick-replies.md)のクイックリプライに更新。

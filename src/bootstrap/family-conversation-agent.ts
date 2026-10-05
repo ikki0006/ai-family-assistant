@@ -8,6 +8,7 @@ import {
 	reminderCandidate,
 } from "../application/conversation/participation";
 import { receiveConversation } from "../application/conversation/receive-conversation";
+import { parseReplyChoices } from "../application/conversation/reply-choices";
 import {
 	type IncomingText,
 	createRespondToMention,
@@ -26,6 +27,7 @@ import {
 import { organizeMemory } from "../application/memory/organize-memory";
 import type { GenerationJob } from "../application/ports/generation-queue";
 import type { MemoryJob } from "../application/ports/long-term-memory";
+import type { QuickReply } from "../application/ports/quick-reply";
 import type { ReminderJob } from "../application/ports/reminder-repository";
 import { AiUsageLimitError } from "../application/ports/text-generator";
 import { participationPrompt, reminderPlannerPrompt } from "../application/prompts/reminders";
@@ -37,6 +39,7 @@ import { createImprovementDispatcher } from "../infrastructure/github/improvemen
 import { createLineAnswerSender } from "../infrastructure/line/answer-sender";
 import { createLinePushSender } from "../infrastructure/line/push-sender";
 import { createLineReplySender } from "../infrastructure/line/reply-sender";
+import { QuickReplies } from "../infrastructure/memory/quick-replies";
 import { SessionConversationStore } from "../infrastructure/memory/session-conversation-store";
 import { diagnostics } from "../infrastructure/observability/diagnostics";
 import { createFamilyProfiles } from "../infrastructure/persistence/d1/family-profiles";
@@ -53,6 +56,7 @@ export class FamilyConversationAgent extends DurableObject<Bindings> {
 	readonly sessions = new Sessions();
 	readonly lifecycle = Lifecycle.install(this).use(this.sessions);
 	private readonly store = new SessionConversationStore(this.ctx.storage.sql, this.sessions);
+	private readonly quickReplies = new QuickReplies(this.ctx.storage.sql);
 	private organizing = false;
 	private serial: Promise<unknown> = Promise.resolve();
 	private locked<T>(fn: () => Promise<T>): Promise<T> {
@@ -64,11 +68,54 @@ export class FamilyConversationAgent extends DurableObject<Bindings> {
 		if (!this.env.AI || !this.env.AI_GATEWAY_ID) throw new Error("Missing AI configuration");
 		return createGeminiTextGenerator(this.env.AI, this.env.AI_GATEWAY_ID, diagnostics, timeoutMs);
 	}
-	async receive(message: IncomingText): Promise<void> {
+	async receive(inbound: IncomingText): Promise<void> {
+		let message = inbound;
 		const group = this.env.LINE_ALLOWED_GROUP_ID?.trim();
 		if (!group || message.groupId !== group || message.chatType !== "group") return;
+		if (message.postback) {
+			const choice = await this.locked(async () =>
+				this.quickReplies.consume(message.postback ?? "", message.speaker, Date.now()),
+			);
+			if (!choice || (choice.kind === "improvement" && !this.env.DB)) {
+				await createLineReplySender(
+					this.env.LINE_CHANNEL_ACCESS_TOKEN ?? "",
+					fetch,
+					diagnostics,
+				).reply(
+					message.replyToken,
+					"この選択は期限切れ・処理済み、または別の人への質問です。もう一度話しかけてください。",
+				);
+				return;
+			}
+			if (choice.kind === "improvement" && !choice.approve && this.env.DB) {
+				const cancelled = await createImprovementRepository(this.env.DB).cancel(
+					group,
+					choice.id,
+					choice.version,
+				);
+				await createLineReplySender(
+					this.env.LINE_CHANNEL_ACCESS_TOKEN ?? "",
+					fetch,
+					diagnostics,
+				).reply(
+					message.replyToken,
+					cancelled ? "改善依頼をキャンセルしました。" : "この依頼はすでに処理されています。",
+				);
+				return;
+			}
+			message = {
+				...message,
+				mentioned: true,
+				text:
+					choice.kind === "improvement"
+						? `改善承認 ${choice.id} ${choice.version}`
+						: `「${choice.question}」への回答: ${choice.text}`,
+			};
+		}
 		if (message.mentioned && !message.unsend && isImprovementRequest(message.text)) {
+			await this.ctx.storage.setAlarm(Date.now() + 3600000);
 			let response = "自動改善の設定がまだ完了していません。";
+			let buttons: QuickReply[] | undefined;
 			if (this.env.DB && this.env.GH_IMPROVEMENT_TOKEN && message.eventId) {
 				try {
 					response =
@@ -80,9 +127,36 @@ export class FamilyConversationAgent extends DurableObject<Bindings> {
 							},
 							{
 								repository: createImprovementRepository(this.env.DB),
+								onProposal: (request) => {
+									buttons = this.quickReplies.issue(
+										[
+											{
+												label: "承認してPR作成",
+												choice: {
+													kind: "improvement",
+													id: request.id,
+													version: request.version,
+													approve: true,
+												},
+											},
+											{
+												label: "キャンセル",
+												choice: {
+													kind: "improvement",
+													id: request.id,
+													version: request.version,
+													approve: false,
+												},
+											},
+										],
+										null,
+										Date.now(),
+										24 * 3600000,
+									);
+								},
 								dispatcher: createImprovementDispatcher(this.env.GH_IMPROVEMENT_TOKEN),
 							},
-						)) ?? "改善承認には確認メッセージのIDと版を指定してください。";
+						)) ?? "改善内容をもう一度送って、確認ボタンを選んでください。";
 				} catch {
 					response = "改善依頼の処理に失敗しました。GitHubの実行状況を確認してください。";
 				}
@@ -91,7 +165,7 @@ export class FamilyConversationAgent extends DurableObject<Bindings> {
 				this.env.LINE_CHANNEL_ACCESS_TOKEN ?? "",
 				fetch,
 				diagnostics,
-			).reply(message.replyToken, response);
+			).reply(message.replyToken, response, buttons);
 			return;
 		}
 		await this.locked(async () => {
@@ -304,6 +378,7 @@ export class FamilyConversationAgent extends DurableObject<Bindings> {
 			},
 		);
 		let answer = "";
+		let choices: string[] = [];
 		let operation: ReminderAction | undefined;
 		let generated = false;
 		let inspectSchedules = false;
@@ -424,6 +499,9 @@ export class FamilyConversationAgent extends DurableObject<Bindings> {
 							Date.now(),
 						)
 					: await generator.generate(input);
+				const parsed = parseReplyChoices(answer);
+				answer = parsed.text;
+				choices = parsed.choices;
 				generated = true;
 			}
 		} catch (error) {
@@ -439,6 +517,7 @@ export class FamilyConversationAgent extends DurableObject<Bindings> {
 			const meta = this.store.meta();
 			if (meta.epoch !== snapshot.epoch || meta.revision !== snapshot.revision) return;
 			if (operation && this.env.DB) {
+				choices = operation.action === "clarify" ? (operation.choices ?? []) : [];
 				if (
 					proactive &&
 					operation.action === "clarify" &&
@@ -466,7 +545,23 @@ export class FamilyConversationAgent extends DurableObject<Bindings> {
 			if (!answer) return;
 			const text = Array.from(answer).slice(0, 2000).join("");
 			// Serialize the final check, delivery, and recording against deletion.
-			await sender.reply(job.replyToken, text);
+			const speaker = snapshot.messages.at(-1)?.speaker;
+			const buttons =
+				choices.length && speaker && speaker !== "unknown"
+					? this.quickReplies.issue(
+							choices.map((label) => ({
+								label,
+								choice: {
+									kind: "conversation" as const,
+									text: label,
+									question: text.slice(0, 500),
+								},
+							})),
+							speaker,
+							Date.now(),
+						)
+					: undefined;
+			await sender.reply(job.replyToken, text, buttons);
 			if (generated) {
 				const now = Date.now();
 				await this.store.append(
@@ -487,6 +582,7 @@ export class FamilyConversationAgent extends DurableObject<Bindings> {
 	private async flushMemoryDeletions(group: string) {
 		const pending = this.store.pendingMemoryDeletions();
 		if (!pending.length) return;
+		this.quickReplies.clear();
 		if (!this.env.DB) return;
 		const repo = createLongTermMemory(this.env.DB);
 		if (pending.includes("profiles:*")) await createFamilyProfiles(this.env.DB).clear(group);
@@ -580,6 +676,7 @@ export class FamilyConversationAgent extends DurableObject<Bindings> {
 		await this.locked(() => deliverReminder(repo, sender, job, group, Date.now()));
 	}
 	async alarm() {
+		this.quickReplies.prune(Date.now());
 		await this.locked(() => this.store.prune(Date.now()));
 		await this.ctx.storage.setAlarm(Date.now() + 3600000);
 	}

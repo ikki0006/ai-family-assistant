@@ -26,6 +26,15 @@ export function createImprovementRepository(db: D1Database): ImprovementReposito
 				.bind(groupId, id)
 				.first<Improvement>();
 		},
+		async cancel(groupId, id, version) {
+			const result = await db
+				.prepare(
+					"DELETE FROM improvements WHERE group_id=? AND id=? AND version=? AND status='pending'",
+				)
+				.bind(groupId, id, version)
+				.run();
+			return result.meta.changes === 1;
+		},
 		async claim(groupId, id, version) {
 			const result = await db
 				.prepare(

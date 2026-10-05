@@ -6,6 +6,7 @@ import {
 	validateSchedule,
 } from "../../domain/reminders/recurrence";
 import type { Recurrence, Reminder, Schedule } from "../../domain/reminders/recurrence";
+import { validChoices } from "../conversation/reply-choices";
 import type { ReminderRepository } from "../ports/reminder-repository";
 export type ReminderAction = Partial<Recurrence> & {
 	action:
@@ -19,6 +20,7 @@ export type ReminderAction = Partial<Recurrence> & {
 		| "resume"
 		| "delete";
 	question?: string;
+	choices?: string[];
 	id?: string;
 	version?: number;
 	title?: string;
@@ -68,6 +70,7 @@ export function parseReminderAction(raw: string): ReminderAction {
 			(!Number.isInteger(o[field]) || Number(o[field]) < 1 || Number(o[field]) > max)
 		)
 			throw new Error("Invalid recurrence field");
+	if (o.choices !== undefined && !validChoices(o.choices)) throw new Error("Invalid choices");
 	return o as ReminderAction;
 }
 export function describeReminder(r: Reminder) {

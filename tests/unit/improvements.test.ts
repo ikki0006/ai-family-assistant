@@ -18,6 +18,7 @@ function setup() {
 	const repository: ImprovementRepository = {
 		create: vi.fn(async () => request),
 		get: vi.fn(async () => request),
+		cancel: vi.fn(async () => true),
 		claim: vi.fn(async () => true),
 		finish: vi.fn(async () => undefined),
 	};
@@ -29,7 +30,7 @@ describe("improvement approval", () => {
 	it("does not dispatch proposals", async () => {
 		const deps = setup();
 		expect(await handleImprovement({ ...input, text: "改善: 回答を短くする" }, deps)).toContain(
-			`改善承認 ${id} 1`,
+			"承認してPR作成",
 		);
 		expect(deps.dispatcher.dispatch).not.toHaveBeenCalled();
 	});
@@ -73,7 +74,7 @@ describe("improvement approval", () => {
 it("accepts natural PR requests as proposals without dispatching", async () => {
 	const deps = setup();
 	const text = "ゴミの予定をDBから参照できるように改良してプルリク上げて";
-	expect(await handleImprovement({ ...input, text }, deps)).toContain("改善承認");
+	expect(await handleImprovement({ ...input, text }, deps)).toContain("承認してPR作成");
 	expect(deps.repository.create).toHaveBeenCalledWith("group", "event", text);
 	expect(deps.dispatcher.dispatch).not.toHaveBeenCalled();
 	expect(await handleImprovement({ ...input, text: "明日ごみを出して" }, deps)).toBeNull();

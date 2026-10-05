@@ -2,6 +2,7 @@ import type { TextGenerator } from "../ports/text-generator";
 import type { WebSearch } from "../ports/web-search";
 import { SEARCH_DECISION_PROMPT } from "../prompts/search";
 import type { GenerationInput } from "./conversation";
+import { parseReplyChoices } from "./reply-choices";
 
 export async function answerWithSearch(
 	input: GenerationInput,
@@ -51,5 +52,5 @@ export async function answerWithSearch(
 		.filter((r) => r.url.length <= 300)
 		.map((r) => r.url)
 		.join("\n");
-	return `${Array.from(answer).slice(0, 750).join("")}\n\n検索時点: ${new Date(now).toISOString().slice(0, 10)}\n参考URL:\n${sources}`;
+	return `${Array.from(parseReplyChoices(answer).text).slice(0, 750).join("")}\n\n検索時点: ${new Date(now).toISOString().slice(0, 10)}\n参考URL:\n${sources}`;
 }

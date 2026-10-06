@@ -14,10 +14,8 @@ import {
 	createRespondToMention,
 } from "../application/conversation/respond-to-mention";
 import { scheduleContext } from "../application/conversation/schedule-context";
-import {
-	handleImprovement,
-	isImprovementRequest,
-} from "../application/improvements/handle-improvement";
+import { handleImprovement } from "../application/improvements/handle-improvement";
+import { manageLists } from "../application/lists/manage-lists";
 import {
 	memoryCommand,
 	memoryInventory,
@@ -26,6 +24,7 @@ import {
 } from "../application/memory/memory-commands";
 import { organizeMemory } from "../application/memory/organize-memory";
 import type { GenerationJob } from "../application/ports/generation-queue";
+import type { Improvement } from "../application/ports/improvement-repository";
 import type { MemoryJob } from "../application/ports/long-term-memory";
 import type { QuickReply } from "../application/ports/quick-reply";
 import type { ReminderJob } from "../application/ports/reminder-repository";
@@ -42,6 +41,7 @@ import { createLineReplySender } from "../infrastructure/line/reply-sender";
 import { QuickReplies } from "../infrastructure/memory/quick-replies";
 import { SessionConversationStore } from "../infrastructure/memory/session-conversation-store";
 import { diagnostics } from "../infrastructure/observability/diagnostics";
+import { createFamilyLists } from "../infrastructure/persistence/d1/family-lists";
 import { createFamilyProfiles } from "../infrastructure/persistence/d1/family-profiles";
 import { createGarbageScheduleStore } from "../infrastructure/persistence/d1/garbage-schedule";
 import { createImprovementRepository } from "../infrastructure/persistence/d1/improvement-repository";
@@ -67,6 +67,17 @@ export class FamilyConversationAgent extends DurableObject<Bindings> {
 	private generator(timeoutMs = 120_000) {
 		if (!this.env.AI || !this.env.AI_GATEWAY_ID) throw new Error("Missing AI configuration");
 		return createGeminiTextGenerator(this.env.AI, this.env.AI_GATEWAY_ID, diagnostics, timeoutMs);
+	}
+	private improvementButtons(request: Improvement): QuickReply[] {
+		return this.quickReplies.issue(
+			[true, false].map((approve) => ({
+				label: approve ? "承認してPR作成" : "キャンセル",
+				choice: { kind: "improvement" as const, id: request.id, version: request.version, approve },
+			})),
+			null,
+			Date.now(),
+			24 * 3600000,
+		);
 	}
 	async receive(inbound: IncomingText): Promise<void> {
 		let message = inbound;
@@ -103,6 +114,28 @@ export class FamilyConversationAgent extends DurableObject<Bindings> {
 				);
 				return;
 			}
+			if (choice.kind === "collection_delete") {
+				const response = await this.locked(async () =>
+					choice.approve && this.env.DB
+						? (
+								await manageLists(
+									createFamilyLists(this.env.DB),
+									group,
+									message.eventId ?? "",
+									{ op: "delete", listId: choice.listId },
+									choice.version,
+									true,
+								)
+							).text
+						: "リストの削除をキャンセルしました。",
+				);
+				await createLineReplySender(
+					this.env.LINE_CHANNEL_ACCESS_TOKEN ?? "",
+					fetch,
+					diagnostics,
+				).reply(message.replyToken, response);
+				return;
+			}
 			message = {
 				...message,
 				mentioned: true,
@@ -112,7 +145,11 @@ export class FamilyConversationAgent extends DurableObject<Bindings> {
 						: `「${choice.question}」への回答: ${choice.text}`,
 			};
 		}
-		if (message.mentioned && !message.unsend && isImprovementRequest(message.text)) {
+		if (
+			message.mentioned &&
+			!message.unsend &&
+			/^(?:(?:改善|改良)[:：]|改善承認(?:\s|$))/.test(message.text.trim())
+		) {
 			await this.ctx.storage.setAlarm(Date.now() + 3600000);
 			let response = "自動改善の設定がまだ完了していません。";
 			let buttons: QuickReply[] | undefined;
@@ -128,31 +165,7 @@ export class FamilyConversationAgent extends DurableObject<Bindings> {
 							{
 								repository: createImprovementRepository(this.env.DB),
 								onProposal: (request) => {
-									buttons = this.quickReplies.issue(
-										[
-											{
-												label: "承認してPR作成",
-												choice: {
-													kind: "improvement",
-													id: request.id,
-													version: request.version,
-													approve: true,
-												},
-											},
-											{
-												label: "キャンセル",
-												choice: {
-													kind: "improvement",
-													id: request.id,
-													version: request.version,
-													approve: false,
-												},
-											},
-										],
-										null,
-										Date.now(),
-										24 * 3600000,
-									);
+									buttons = this.improvementButtons(request);
 								},
 								dispatcher: createImprovementDispatcher(this.env.GH_IMPROVEMENT_TOKEN),
 							},
@@ -238,7 +251,7 @@ export class FamilyConversationAgent extends DurableObject<Bindings> {
 						await this.flushMemoryDeletions(group);
 						await profiles.clear(group);
 						response =
-							"会話・要約・長期記憶・家族プロフィールを削除しました。登録した通知・収集設定とLINE上のメッセージは残ります。";
+							"会話・要約・長期記憶・家族プロフィールを削除しました。登録した通知・収集設定・共有リストとLINE上のメッセージは残ります。";
 					} else if (incoming.speaker && /^U[0-9a-f]{32}$/.test(incoming.speaker)) {
 						if (text === "プロフィール削除") {
 							for (const id of own?.sourceIds ?? []) await this.store.forget(id, now);
@@ -306,7 +319,7 @@ export class FamilyConversationAgent extends DurableObject<Bindings> {
 					await this.store.reset(incoming.eventId, incoming.occurredAt, now);
 					await this.flushMemoryDeletions(group);
 					response =
-						"会話履歴・要約・長期記憶を削除しました。登録した通知と家族プロフィールは残っています。";
+						"会話履歴・要約・長期記憶を削除しました。登録した通知・共有リスト・家族プロフィールは残っています。";
 				}
 				if (command.type === "forget") {
 					const fact = (await repo.list(group, now)).find((f) => f.id === command.id);
@@ -382,6 +395,7 @@ export class FamilyConversationAgent extends DurableObject<Bindings> {
 		let operation: ReminderAction | undefined;
 		let generated = false;
 		let inspectSchedules = false;
+		let listVersion = 0;
 		const latest = snapshot.messages.at(-1)?.text ?? "";
 		const proactive = job.passive === true && !explicitReminderRequest(latest);
 		try {
@@ -395,6 +409,8 @@ export class FamilyConversationAgent extends DurableObject<Bindings> {
 			}));
 			if (this.env.DB) {
 				const existing = await createReminderRepository(this.env.DB).list(job.groupId);
+				const listState = await createFamilyLists(this.env.DB).load(job.groupId);
+				listVersion = listState.version;
 				const quoted = job.quotedMessageId
 					? this.store.outgoing(job.quotedMessageId, Date.now())
 					: undefined;
@@ -406,6 +422,12 @@ export class FamilyConversationAgent extends DurableObject<Bindings> {
 							content: JSON.stringify({
 								now: new Date(Date.now() + 9 * 3600000).toISOString().replace("Z", "+09:00"),
 								profiles: profileContext,
+								collections: listState.lists.map((l) => ({
+									id: l.id,
+									name: l.name,
+									aliases: l.aliases,
+									items: l.items.map((i) => ({ id: i.id, text: i.text })),
+								})),
 								speaker: snapshot.messages.at(-1)?.speaker,
 								passive: job.passive === true,
 								latest,
@@ -429,6 +451,7 @@ export class FamilyConversationAgent extends DurableObject<Bindings> {
 					],
 				});
 				operation = parseReminderAction(plan);
+				if (job.passive && ["improve", "collection"].includes(operation.action)) return;
 				if (operation.action === "inspect") {
 					inspectSchedules = !job.passive;
 					operation = { action: "none" };
@@ -516,7 +539,46 @@ export class FamilyConversationAgent extends DurableObject<Bindings> {
 			await this.store.prune(Date.now());
 			const meta = this.store.meta();
 			if (meta.epoch !== snapshot.epoch || meta.revision !== snapshot.revision) return;
-			if (operation && this.env.DB) {
+			let proposalButtons: QuickReply[] | undefined;
+			if (operation?.action === "collection" && operation.collection && this.env.DB) {
+				const result = await manageLists(
+					createFamilyLists(this.env.DB),
+					job.groupId,
+					job.eventId,
+					operation.collection,
+					listVersion,
+				);
+				answer = result.text;
+				generated = true;
+				const confirmation = result.confirm;
+				if (confirmation)
+					proposalButtons = this.quickReplies.issue(
+						[true, false].map((approve) => ({
+							label: approve ? "リストを削除" : "キャンセル",
+							choice: { kind: "collection_delete" as const, ...confirmation, approve },
+						})),
+						snapshot.messages.at(-1)?.speaker ?? "unknown",
+						Date.now(),
+					);
+			} else if (operation?.action === "improve" && this.env.DB) {
+				answer = this.env.GH_IMPROVEMENT_TOKEN
+					? ((await handleImprovement(
+							{
+								text: `改善: ${operation.specification}`,
+								groupId: job.groupId,
+								eventId: job.eventId,
+							},
+							{
+								repository: createImprovementRepository(this.env.DB),
+								dispatcher: createImprovementDispatcher(this.env.GH_IMPROVEMENT_TOKEN),
+								onProposal: (request) => {
+									proposalButtons = this.improvementButtons(request);
+								},
+							},
+						)) ?? "")
+					: "自動改善の設定がまだ完了していません。";
+				generated = true;
+			} else if (operation && this.env.DB) {
 				choices = operation.action === "clarify" ? (operation.choices ?? []) : [];
 				if (
 					proactive &&
@@ -561,7 +623,7 @@ export class FamilyConversationAgent extends DurableObject<Bindings> {
 							Date.now(),
 						)
 					: undefined;
-			await sender.reply(job.replyToken, text, buttons);
+			await sender.reply(job.replyToken, text, proposalButtons ?? buttons);
 			if (generated) {
 				const now = Date.now();
 				await this.store.append(

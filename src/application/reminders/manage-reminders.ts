@@ -7,19 +7,24 @@ import {
 } from "../../domain/reminders/recurrence";
 import type { Recurrence, Reminder, Schedule } from "../../domain/reminders/recurrence";
 import { validChoices } from "../conversation/reply-choices";
+import { type ListAction, parseListAction } from "../lists/manage-lists";
 import type { ReminderRepository } from "../ports/reminder-repository";
 export type ReminderAction = Partial<Recurrence> & {
 	action:
 		| "none"
 		| "clarify"
 		| "inspect"
+		| "improve"
+		| "collection"
 		| "list"
 		| "create"
 		| "update"
 		| "pause"
 		| "resume"
 		| "delete";
+	collection?: ListAction;
 	question?: string;
+	specification?: string;
 	choices?: string[];
 	id?: string;
 	version?: number;
@@ -41,6 +46,8 @@ export function parseReminderAction(raw: string): ReminderAction {
 			"none",
 			"clarify",
 			"inspect",
+			"improve",
+			"collection",
 			"list",
 			"create",
 			"update",
@@ -71,6 +78,14 @@ export function parseReminderAction(raw: string): ReminderAction {
 		)
 			throw new Error("Invalid recurrence field");
 	if (o.choices !== undefined && !validChoices(o.choices)) throw new Error("Invalid choices");
+	if (
+		o.action === "improve" &&
+		(typeof o.specification !== "string" ||
+			o.specification.trim().length < 5 ||
+			o.specification.length > 1500)
+	)
+		throw new Error("Invalid improvement specification");
+	if (o.action === "collection") o.collection = parseListAction(o.collection);
 	return o as ReminderAction;
 }
 export function describeReminder(r: Reminder) {
@@ -83,7 +98,13 @@ export async function manageReminders(
 	action: ReminderAction,
 	now: number,
 ): Promise<string | null> {
-	if (action.action === "none" || action.action === "inspect") return null;
+	if (
+		action.action === "none" ||
+		action.action === "inspect" ||
+		action.action === "improve" ||
+		action.action === "collection"
+	)
+		return null;
 	if (action.action === "clarify") return action.question || "通知の内容と日時を教えてください。";
 	if (action.action === "list") {
 		const rows = await repo.list(group);

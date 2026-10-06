@@ -3,6 +3,7 @@ import { env } from "cloudflare:workers";
 import { beforeAll, beforeEach, expect, it } from "vitest";
 import migration from "../../migrations/0005_long_term_memories.sql?raw";
 import profileMigration from "../../migrations/0007_family_profiles.sql?raw";
+import listMigration from "../../migrations/0008_family_lists.sql?raw";
 import type { FamilyConversationAgent } from "../../src/bootstrap/family-conversation-agent";
 import {
 	RETENTION_MS,
@@ -30,6 +31,7 @@ function message(id: string, at = now - 20 * 60000) {
 }
 beforeAll(async () => {
 	await (env as unknown as { DB: D1Database }).DB.exec(profileMigration.replace(/\n/g, " "));
+	await (env as unknown as { DB: D1Database }).DB.exec(listMigration.replace(/\n/g, " "));
 	await bindings.DB.exec(migration.replace(/\n/g, " "));
 });
 beforeEach(async () => {

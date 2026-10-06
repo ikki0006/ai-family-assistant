@@ -79,3 +79,21 @@ it("accepts natural PR requests as proposals without dispatching", async () => {
 	expect(deps.dispatcher.dispatch).not.toHaveBeenCalled();
 	expect(await handleImprovement({ ...input, text: "明日ごみを出して" }, deps)).toBeNull();
 });
+
+it("parses a contextual proposal but cannot turn it into an approved execution", async () => {
+	const { parseReminderAction } = await import("../../src/application/reminders/manage-reminders");
+	expect(
+		parseReminderAction(
+			JSON.stringify({ action: "improve", specification: "質問の選択肢をボタンで表示する" }),
+		),
+	).toMatchObject({ action: "improve" });
+	expect(() => parseReminderAction('{"action":"improve","specification":""}')).toThrow();
+	const deps = setup();
+	const onProposal = vi.fn();
+	await handleImprovement(
+		{ ...input, text: "改善: 質問の選択肢をボタンで表示する" },
+		{ ...deps, onProposal },
+	);
+	expect(onProposal).toHaveBeenCalledOnce();
+	expect(deps.dispatcher.dispatch).not.toHaveBeenCalled();
+});

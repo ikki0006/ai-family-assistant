@@ -5,6 +5,7 @@ import migration from "../../migrations/0003_reminders.sql?raw";
 import memoryMigration from "../../migrations/0005_long_term_memories.sql?raw";
 import calendarMigration from "../../migrations/0006_calendar_reminders.sql?raw";
 import profileMigration from "../../migrations/0007_family_profiles.sql?raw";
+import listMigration from "../../migrations/0008_family_lists.sql?raw";
 import { deliverReminder } from "../../src/application/reminders/deliver-reminder";
 import { manageReminders } from "../../src/application/reminders/manage-reminders";
 import { dispatchReminders } from "../../src/bootstrap/dispatch-reminders";
@@ -15,6 +16,7 @@ const repo = createReminderRepository(db);
 const now = Date.parse("2026-10-04T08:00:00Z");
 beforeAll(async () => {
 	await (env as unknown as { DB: D1Database }).DB.exec(profileMigration.replace(/\n/g, " "));
+	await (env as unknown as { DB: D1Database }).DB.exec(listMigration.replace(/\n/g, " "));
 	await db.exec(memoryMigration.replace(/\n/g, " "));
 	await db.exec(previousMigration.replace(/--[^\n]*/g, "").replace(/\n/g, " "));
 	await db.exec(migration.replace(/\n/g, " "));
@@ -488,4 +490,185 @@ it("loads collection rules only for the read-only inspect tool and includes them
 				}
 			},
 		);
+});
+
+it("turns contextual improvement intent into buttons without dispatching, but ignores passive proposals", async () => {
+	const { runInDurableObject } = await import("cloudflare:test");
+	const { SessionConversationStore } = await import(
+		"../../src/infrastructure/memory/session-conversation-store"
+	);
+	const ns = (
+		env as unknown as {
+			CONVERSATIONS: DurableObjectNamespace<
+				import("../../src/bootstrap/family-conversation-agent").FamilyConversationAgent
+			>;
+		}
+	).CONVERSATIONS;
+	const improvementMigration = await import("../../migrations/0004_improvements.sql?raw");
+	await db.exec(improvementMigration.default.replace(/\n/g, " "));
+	for (const passive of [false, true])
+		await runInDurableObject(
+			ns.get(ns.idFromName(crypto.randomUUID())),
+			async (instance, state) => {
+				const run = vi.fn(async () =>
+					Response.json({
+						candidates: [
+							{
+								finishReason: "STOP",
+								content: {
+									parts: [
+										{
+											text: JSON.stringify({
+												action: "improve",
+												specification: "通知の確認を短いボタンで回答できるようにする",
+											}),
+										},
+									],
+								},
+							},
+						],
+					}),
+				);
+				Object.defineProperty(instance, "env", {
+					value: {
+						DB: db,
+						LINE_ALLOWED_GROUP_ID: group,
+						LINE_CHANNEL_ACCESS_TOKEN: "test",
+						GH_IMPROVEMENT_TOKEN: "test",
+						AI: { gateway: () => ({ run }) },
+						AI_GATEWAY_ID: "test",
+					},
+					configurable: true,
+				});
+				const store = new SessionConversationStore(state.storage.sql, instance.sessions);
+				const at = Date.now();
+				const append = (id: string, text: string) =>
+					store.append(
+						{
+							id,
+							role: "user",
+							speaker: "fictional",
+							text,
+							occurredAt: at,
+							day: new Date(at).toISOString().slice(0, 10),
+						},
+						id,
+						at,
+					);
+				await append("prior", "確認を選択肢で返せると便利だね");
+				const ref = await append("request", "それ作れる？");
+				if (!ref) throw new Error("missing reference");
+				const original = globalThis.fetch;
+				const sent: string[] = [];
+				globalThis.fetch = async (url, init) => {
+					expect(String(url)).toContain("api.line.me");
+					sent.push(String(init?.body));
+					return Response.json({});
+				};
+				try {
+					await instance.answer({
+						eventId: `context-${passive}`,
+						groupId: group,
+						text: "",
+						replyToken: "r",
+						receivedAt: at,
+						memory: ref,
+						passive,
+					});
+					expect(JSON.stringify(run.mock.calls)).toContain("それ作れる？");
+					if (passive) expect(sent).toHaveLength(0);
+					else {
+						expect(sent).toHaveLength(1);
+						expect(sent[0]).toContain("承認してPR作成");
+						expect(sent[0]).toContain("通知の確認を短いボタン");
+					}
+				} finally {
+					globalThis.fetch = original;
+				}
+			},
+		);
+});
+
+it("executes shared list requests through the conversation planner without creating reminders", async () => {
+	const { runInDurableObject } = await import("cloudflare:test");
+	const { SessionConversationStore } = await import(
+		"../../src/infrastructure/memory/session-conversation-store"
+	);
+	const { createFamilyLists } = await import(
+		"../../src/infrastructure/persistence/d1/family-lists"
+	);
+	const ns = (
+		env as unknown as {
+			CONVERSATIONS: DurableObjectNamespace<
+				import("../../src/bootstrap/family-conversation-agent").FamilyConversationAgent
+			>;
+		}
+	).CONVERSATIONS;
+	await runInDurableObject(ns.get(ns.idFromName(crypto.randomUUID())), async (instance, state) => {
+		const run = vi.fn(async () =>
+			Response.json({
+				candidates: [
+					{
+						finishReason: "STOP",
+						content: {
+							parts: [
+								{
+									text: JSON.stringify({
+										action: "collection",
+										collection: { op: "create", name: "行きたい公園", text: "架空公園" },
+									}),
+								},
+							],
+						},
+					},
+				],
+			}),
+		);
+		Object.defineProperty(instance, "env", {
+			value: {
+				DB: db,
+				LINE_ALLOWED_GROUP_ID: group,
+				LINE_CHANNEL_ACCESS_TOKEN: "test",
+				AI: { gateway: () => ({ run }) },
+				AI_GATEWAY_ID: "test",
+			},
+			configurable: true,
+		});
+		const store = new SessionConversationStore(state.storage.sql, instance.sessions);
+		const now = Date.now();
+		const ref = await store.append(
+			{
+				id: "list-request",
+				role: "user",
+				speaker: "fictional",
+				text: "行きたい公園リストに架空公園を入れて",
+				occurredAt: now,
+				day: new Date(now).toISOString().slice(0, 10),
+			},
+			"list-request",
+			now,
+		);
+		if (!ref) throw new Error();
+		const original = globalThis.fetch;
+		const sent: string[] = [];
+		globalThis.fetch = async (_url, init) => {
+			sent.push(String(init?.body));
+			return Response.json({});
+		};
+		try {
+			await instance.answer({
+				eventId: "list-request",
+				groupId: group,
+				text: "",
+				replyToken: "r",
+				receivedAt: now,
+				memory: ref,
+			});
+		} finally {
+			globalThis.fetch = original;
+		}
+		expect(sent[0]).toContain("追加しました");
+		expect((await createFamilyLists(db).load(group)).lists[0]?.items[0]?.text).toBe("架空公園");
+		expect(await repo.list(group)).toEqual([]);
+	});
 });

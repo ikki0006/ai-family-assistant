@@ -2,6 +2,7 @@ import { env } from "cloudflare:workers";
 import { beforeAll, beforeEach, expect, it, vi } from "vitest";
 import migration from "../../migrations/0001_generation_claims.sql?raw";
 import profileMigration from "../../migrations/0007_family_profiles.sql?raw";
+import listMigration from "../../migrations/0008_family_lists.sql?raw";
 import { processGenerationBatch } from "../../src/bootstrap/process-generation-batch";
 import { createGenerationClaims } from "../../src/infrastructure/persistence/d1/generation-claims";
 
@@ -22,6 +23,7 @@ const bindings = {
 
 beforeAll(async () => {
 	await (env as unknown as { DB: D1Database }).DB.exec(profileMigration.replace(/\n/g, " "));
+	await (env as unknown as { DB: D1Database }).DB.exec(listMigration.replace(/\n/g, " "));
 	await db.exec(migration.replace(/--[^\n]*/g, "").replace(/\n/g, " "));
 });
 beforeEach(async () => {

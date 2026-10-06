@@ -44,10 +44,7 @@ test("rejects incomplete, malformed and forbidden modifications without leaking 
 		response("[]"),
 		response(JSON.stringify([{ path: ".github/workflows/x.yml", content: "bad" }])),
 	]) {
-		await assert.rejects(
-			() => generateFiles(input, async () => result),
-			/Improvement result is incomplete/,
-		);
+		await assert.rejects(() => generateFiles(input, async () => result), /Improvement/);
 	}
 });
 test("does not retry or fall back when budget, authorization or transport fails", async () => {
@@ -85,4 +82,26 @@ test("rejects invalid destinations and unbounded input before network access", a
 	])
 		await assert.rejects(() => generateFiles({ ...input, ...invalid }, fetcher));
 	assert.equal(calls, 0);
+});
+
+test("applies small exact edits and rejects ambiguous or unseen sources", async () => {
+	const change = { path: files[0].path, edits: [{ old: "'example'", new: "'short'" }] };
+	const result = await generateFiles(input, async () => response(JSON.stringify([change])));
+	assert.equal(result[0].content, "export const text='short';");
+	for (const invalid of [
+		{ ...change, edits: [{ old: "missing", new: "x" }] },
+		{ ...change, path: "src/application/other.ts" },
+		{ ...change, edits: [{ old: "", new: "x" }] },
+	])
+		await assert.rejects(
+			() => generateFiles(input, async () => response(JSON.stringify([invalid]))),
+			/Improvement|Invalid/,
+		);
+	await assert.rejects(
+		() =>
+			generateFiles({ ...input, sources: [`${files[0].path}\nxx`] }, async () =>
+				response(JSON.stringify([{ ...change, edits: [{ old: "x", new: "y" }] }])),
+			),
+		/exactly once/,
+	);
 });

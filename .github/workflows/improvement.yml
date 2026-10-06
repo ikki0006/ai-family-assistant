@@ -30,7 +30,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22.22.3
-      - name: Generate bounded files (one Gemini call)
+      - name: Select sources and generate bounded edits
         run: node scripts/improvement-agent/generate.mjs
         env:
           CF_IMPROVEMENT_GATEWAY_TOKEN: ${{ secrets.CF_IMPROVEMENT_GATEWAY_TOKEN }}

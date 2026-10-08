@@ -13,7 +13,7 @@ export function createLineImageReader(
 			if (!/^[0-9]{1,64}$/.test(id)) throw new ImageContentError("unavailable");
 			const response = await fetcher(`https://api-data.line.me/v2/bot/message/${id}/content`, {
 				headers: { Authorization: `Bearer ${token}` },
-				redirect: "error",
+				redirect: "manual",
 				signal: AbortSignal.timeout(15000),
 			});
 			if (!response.ok || !response.body) throw new ImageContentError("unavailable");

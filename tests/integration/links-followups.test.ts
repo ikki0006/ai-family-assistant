@@ -7,8 +7,10 @@ import profiles from "../../migrations/0007_family_profiles.sql?raw";
 import lists from "../../migrations/0008_family_lists.sql?raw";
 import type { GenerationJob } from "../../src/application/ports/generation-queue";
 import type { FamilyConversationAgent } from "../../src/bootstrap/family-conversation-agent";
+import { createLineImageReader } from "../../src/infrastructure/line/image-content";
 import { PendingQuestions } from "../../src/infrastructure/memory/pending-questions";
 import { createFamilyLists } from "../../src/infrastructure/persistence/d1/family-lists";
+import { createTavilyPageReader } from "../../src/infrastructure/search/tavily-page-reader";
 const ns = (env as unknown as { CONVERSATIONS: DurableObjectNamespace<FamilyConversationAgent> })
 	.CONVERSATIONS;
 const group = `C${"1".repeat(32)}`;
@@ -198,4 +200,33 @@ it("adds the resolved place to D1 only after a plain confirmation reply", async 
 			globalThis.fetch = original;
 		}
 	});
+});
+
+it("constructs actual adapter requests in Workers and refuses redirects", async () => {
+	const seen: Request[] = [];
+	const fetcher: typeof fetch = async (url, init) => {
+		const request = new Request(url, init);
+		seen.push(request);
+		if (request.url.includes("tavily"))
+			return Response.json({ results: [{ url: "https://example.com", raw_content: "fixture" }] });
+		return new Response(new Uint8Array([255, 216, 255, 0]), {
+			headers: { "content-type": "image/jpeg" },
+		});
+	};
+	expect(
+		(await createTavilyPageReader("fixture-key", fetcher).read("https://example.com")).content,
+	).toBe("fixture");
+	expect((await createLineImageReader("fixture-key", fetcher).read("123")).mimeType).toBe(
+		"image/jpeg",
+	);
+	expect(seen.map((r) => r.redirect)).toEqual(["manual", "manual"]);
+	const redirect = vi.fn<typeof fetch>(async (url, init) => {
+		new Request(url, init);
+		return new Response(null, { status: 302, headers: { location: "https://other.example.com" } });
+	});
+	await expect(
+		createTavilyPageReader("fixture", redirect).read("https://example.com"),
+	).rejects.toThrow("upstream");
+	await expect(createLineImageReader("fixture", redirect).read("123")).rejects.toThrow();
+	expect(redirect).toHaveBeenCalledTimes(2);
 });

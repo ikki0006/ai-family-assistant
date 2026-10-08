@@ -1,6 +1,7 @@
 import { expect, it, vi } from "vitest";
 import { isBareUrl, messageUrls } from "../../src/application/conversation/message-url";
 import { isQuestionReply, readLink } from "../../src/application/conversation/read-link";
+import { PageReadError } from "../../src/application/ports/web-page-reader";
 import { publicPageUrl } from "../../src/infrastructure/search/page-url";
 import { createTavilyPageReader } from "../../src/infrastructure/search/tavily-page-reader";
 it("recognizes supplied URLs and rejects local, credentialed and signed links", () => {
@@ -35,7 +36,7 @@ it("uses only Tavily's fixed extract endpoint, bounds content and rejects empty 
 		Response.json({ results: [], failed_results: [{ error: "secret-details" }] }),
 	);
 	await expect(reader.read("https://example.com/place")).rejects.toThrow("Page reading failed");
-	await expect(reader.read("http://localhost/private")).rejects.toThrow("Unsupported");
+	await expect(reader.read("http://localhost/private")).rejects.toThrow("unsupported");
 	expect(fetcher).toHaveBeenCalledTimes(2);
 });
 it("does not ask the LLM to invent content after failure or quota exhaustion", async () => {
@@ -80,4 +81,29 @@ it("fails closed on ambiguous or malformed followup classifications", async () =
 	expect(await isQuestionReply("何時？", "18時", { generate })).toBe(false);
 	generate.mockRejectedValue(new Error());
 	expect(await isQuestionReply("何時？", "18時", { generate })).toBe(false);
+});
+
+it("reports safe failure categories without leaking provider errors or URLs", async () => {
+	const failure = vi.fn();
+	const generator = { generate: vi.fn() };
+	const reader = createTavilyPageReader(
+		"private-key",
+		async () => new Response("secret provider detail", { status: 401 }),
+	);
+	const answer = await readLink("https://example.com", "", reader, generator, async () => true, {
+		failure,
+		groupSetup: vi.fn(),
+	});
+	expect(answer.text).toContain("認証に失敗");
+	expect(failure).toHaveBeenCalledWith("page_read_auth", 401);
+	expect(JSON.stringify(failure.mock.calls)).not.toContain("private-key");
+	expect(generator.generate).not.toHaveBeenCalled();
+	const timedOut = {
+		read: async () => {
+			throw new PageReadError("timeout");
+		},
+	};
+	expect(
+		(await readLink("https://example.com", "", timedOut, generator, async () => true)).text,
+	).toContain("時間切れ");
 });

@@ -487,6 +487,7 @@ export class FamilyConversationAgent extends DurableObject<Bindings> {
 						: undefined,
 					this.generator(30_000),
 					async () => this.locked(async () => reserveSearch(this.ctx.storage.sql, Date.now())),
+					diagnostics,
 				);
 				answer = result.text;
 				choices = result.choices;

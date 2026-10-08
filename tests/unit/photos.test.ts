@@ -45,7 +45,7 @@ it("fetches image bytes only from LINE and passes inline data with no conversati
 	};
 	expect(await analyzePhoto("123", reader, generator)).toContain("100円");
 	expect(fetcher.mock.calls[0]?.[0]).toBe("https://api-data.line.me/v2/bot/message/123/content");
-	expect(fetcher.mock.calls[0]?.[1]?.redirect).toBe("error");
+	expect(fetcher.mock.calls[0]?.[1]?.redirect).toBe("manual");
 	const input = generator.generate.mock.calls[0]?.[0] as unknown;
 	expect(input).toMatchObject({
 		messages: [{ role: "user", image: { mimeType: "image/png", data: "iVBORw0KGgoA" } }],

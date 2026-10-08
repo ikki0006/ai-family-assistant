@@ -16,7 +16,15 @@ export type FailureCode =
 	| "llm_api_failed"
 	| "llm_generation_failed"
 	| "llm_empty_response"
-	| "llm_timeout";
+	| "llm_timeout"
+	| "page_read_unsupported"
+	| "page_read_auth"
+	| "page_read_limited"
+	| "page_read_timeout"
+	| "page_read_transport"
+	| "page_read_upstream"
+	| "page_read_empty"
+	| "page_read_invalid_response";
 
 export type ConfigurationIssue =
 	| "missing_channel_secret"

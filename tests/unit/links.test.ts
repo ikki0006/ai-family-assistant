@@ -49,7 +49,7 @@ it("does not ask the LLM to invent content after failure or quota exhaustion", a
 	expect(reader.read).not.toHaveBeenCalled();
 	reserve.mockResolvedValue(true);
 	expect((await readLink("https://example.com", "", reader, generator, reserve)).text).toContain(
-		"読み取れません",
+		"通信処理で失敗",
 	);
 	expect(generator.generate).not.toHaveBeenCalled();
 });
@@ -106,4 +106,48 @@ it("reports safe failure categories without leaking provider errors or URLs", as
 	expect(
 		(await readLink("https://example.com", "", timedOut, generator, async () => true)).text,
 	).toContain("時間切れ");
+});
+
+it("shows actionable explanations and stable codes for every page-read failure", async () => {
+	const reasons = [
+		"unsupported",
+		"auth",
+		"limited",
+		"timeout",
+		"transport",
+		"upstream",
+		"empty",
+		"invalid_response",
+	] as const;
+	const messages = new Set<string>();
+	for (const reason of reasons) {
+		const answer = await readLink(
+			"https://example.com",
+			"",
+			{
+				read: async () => {
+					throw new PageReadError(reason, 503);
+				},
+			},
+			{ generate: vi.fn() },
+			async () => true,
+		);
+		expect(answer.text).toContain(`確認コード: page_read_${reason} / HTTP 503`);
+		messages.add(answer.text.split("\n")[0] ?? "");
+	}
+	expect(messages.size).toBe(reasons.length);
+	const unknown = await readLink(
+		"https://example.com",
+		"",
+		{
+			read: async () => {
+				throw new Error("Authorization Bearer private-key at private-url");
+			},
+		},
+		{ generate: vi.fn() },
+		async () => true,
+	);
+	expect(unknown.text).toContain("page_read_transport");
+	expect(unknown.text).not.toContain("private-key");
+	expect(unknown.text).not.toContain("private-url");
 });

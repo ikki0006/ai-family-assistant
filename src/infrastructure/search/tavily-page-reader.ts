@@ -33,9 +33,9 @@ export function createTavilyPageReader(key: string, fetcher: typeof fetch = fetc
 					);
 
 				const parsed = responseSchema.safeParse(await response.json());
-				if (!parsed.success) throw new PageReadError("invalid_response");
+				if (!parsed.success) throw new PageReadError("invalid_response", response.status);
 				const page = parsed.data.results[0];
-				if (!page?.raw_content.trim()) throw new PageReadError("empty");
+				if (!page?.raw_content.trim()) throw new PageReadError("empty", response.status);
 				if (!publicPageUrl(page.url)) throw new PageReadError("unsupported");
 				return { url: page.url, content: page.raw_content.slice(0, 8000) };
 			} catch (error) {

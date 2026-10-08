@@ -71,11 +71,12 @@ export async function processGenerationBatch(
 				continue;
 			}
 			if (env.CONVERSATIONS) {
-				if (job.memory)
+				if (job.memory || job.imageId)
 					await env.CONVERSATIONS.get(env.CONVERSATIONS.idFromName(job.groupId)).answer(job);
 				message.ack();
 				continue;
 			}
+			if (job.imageId) throw new Error("Missing conversations binding for image");
 			const respond = createRespondToMention(
 				createLineAnswerSender(token, job, fetcher, diagnostics),
 				job.groupId,

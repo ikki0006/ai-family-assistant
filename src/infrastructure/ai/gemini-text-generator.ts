@@ -41,7 +41,19 @@ export function createGeminiTextGenerator(
 							systemInstruction: { parts: [{ text: input.system }] },
 							contents: input.messages.map((message) => ({
 								role: message.role === "assistant" ? "model" : "user",
-								parts: [{ text: message.content }],
+								parts: [
+									{ text: message.content },
+									...(message.image
+										? [
+												{
+													inlineData: {
+														mimeType: message.image.mimeType,
+														data: message.image.data,
+													},
+												},
+											]
+										: []),
+								],
 							})),
 							generationConfig: {
 								maxOutputTokens: 2048,

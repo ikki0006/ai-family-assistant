@@ -24,3 +24,5 @@ Accepted (2026-10-05)
 ## Enforcement
 
 トークンの話者制限・失効・一度限りの消費、メンションなしの回答キュー投入、Webhook解析、改善の原子的承認をテストする。pnpm verifyで検証する。
+
+後続: [ADR-0027](0027-links-and-followups.md)で、確認待ちの質問への自由文返信を追加。

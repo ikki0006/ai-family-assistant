@@ -43,6 +43,9 @@ export class QuickReplies {
 		this.sql.exec("DELETE FROM quick_replies WHERE batch=?", row.batch);
 		return JSON.parse(row.payload) as ReplyChoice;
 	}
+	clearOwner(owner: string) {
+		this.sql.exec("DELETE FROM quick_replies WHERE owner=?", owner);
+	}
 	prune(now: number) {
 		this.sql.exec("DELETE FROM quick_replies WHERE expires<=?", now);
 	}

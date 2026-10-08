@@ -99,6 +99,38 @@ export function parseWebhook(body: string): IncomingText[] | null {
 					unsend: true,
 				},
 			];
+		const photo = z
+			.object({
+				replyToken: z.string().min(1),
+				type: z.literal("message"),
+				mode: z.enum(["active", "standby"]).optional(),
+				webhookEventId: z.string().min(1).max(128),
+				timestamp: z.number().int().nonnegative(),
+				source: z.object({ type: z.literal("group"), groupId: z.string().min(1) }),
+				message: z.object({
+					type: z.literal("image"),
+					id: z.string().regex(/^[0-9]{1,64}$/),
+					contentProvider: z.object({ type: z.literal("line") }),
+				}),
+			})
+			.safeParse(event);
+		if (photo.success) {
+			const v = photo.data;
+			if (v.mode === "standby") return [];
+			return [
+				{
+					eventId: v.webhookEventId,
+					messageId: v.message.id,
+					occurredAt: v.timestamp,
+					chatType: "group",
+					groupId: v.source.groupId,
+					mentioned: false,
+					text: "",
+					replyToken: v.replyToken,
+					image: true,
+				},
+			];
+		}
 		const result = textEventSchema.safeParse(event);
 		// Non-text, future event types, and standby events require no reply.
 		if (!result.success || result.data.mode === "standby") return [];

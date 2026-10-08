@@ -12,6 +12,8 @@
 | 会話・長期記憶の保存、整理、一覧、削除 | [記憶](memory.md) |
 | 予定の質問、繰り返し通知、ゴミ収集設定 | [予定・通知](reminders.md) |
 | お店・公園など複数リストの管理 | [共有リスト](lists.md) |
+| URLから場所を確認・メンションなしの返答 | [URL参照と会話の続き](links-and-followups.md) |
+| 写真・レシート・文字の読み取り | [写真](photos.md) |
 | 改善依頼、承認、GitHub設定、修正できる範囲 | [自己改善](improvements.md) |
 | 配備済みの範囲、実機未確認、未実装 | [実装状況と残タスク](remaining-tasks.md) |
 | なぜこの構成にしたか | [ADR索引](adr/README.md) |

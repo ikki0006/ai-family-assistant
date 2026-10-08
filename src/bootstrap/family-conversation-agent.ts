@@ -3,10 +3,12 @@ import { Lifecycle } from "agents/lifecycle";
 import { Sessions } from "agents/sessions";
 import { answerWithSearch } from "../application/conversation/answer-with-search";
 import { buildContext, contextSize } from "../application/conversation/build-context";
+import { isBareUrl, messageUrls } from "../application/conversation/message-url";
 import {
 	explicitReminderRequest,
 	reminderCandidate,
 } from "../application/conversation/participation";
+import { isQuestionReply, readLink } from "../application/conversation/read-link";
 import { receiveConversation } from "../application/conversation/receive-conversation";
 import { parseReplyChoices } from "../application/conversation/reply-choices";
 import {
@@ -23,12 +25,14 @@ import {
 	scheduleInventory,
 } from "../application/memory/memory-commands";
 import { organizeMemory } from "../application/memory/organize-memory";
+import { analyzePhoto } from "../application/photos/analyze-photo";
 import type { GenerationJob } from "../application/ports/generation-queue";
 import type { Improvement } from "../application/ports/improvement-repository";
 import type { MemoryJob } from "../application/ports/long-term-memory";
 import type { QuickReply } from "../application/ports/quick-reply";
 import type { ReminderJob } from "../application/ports/reminder-repository";
 import { AiUsageLimitError } from "../application/ports/text-generator";
+import { followupContextPrompt } from "../application/prompts/links";
 import { participationPrompt, reminderPlannerPrompt } from "../application/prompts/reminders";
 import { deliverReminder } from "../application/reminders/deliver-reminder";
 import { manageReminders, parseReminderAction } from "../application/reminders/manage-reminders";
@@ -36,8 +40,11 @@ import type { ReminderAction } from "../application/reminders/manage-reminders";
 import { createGeminiTextGenerator } from "../infrastructure/ai/gemini-text-generator";
 import { createImprovementDispatcher } from "../infrastructure/github/improvement-dispatcher";
 import { createLineAnswerSender } from "../infrastructure/line/answer-sender";
+import { createLineImageReader } from "../infrastructure/line/image-content";
 import { createLinePushSender } from "../infrastructure/line/push-sender";
 import { createLineReplySender } from "../infrastructure/line/reply-sender";
+import { PendingQuestions } from "../infrastructure/memory/pending-questions";
+import { PhotoReferences } from "../infrastructure/memory/photo-references";
 import { QuickReplies } from "../infrastructure/memory/quick-replies";
 import { SessionConversationStore } from "../infrastructure/memory/session-conversation-store";
 import { diagnostics } from "../infrastructure/observability/diagnostics";
@@ -49,6 +56,7 @@ import { createLongTermMemory } from "../infrastructure/persistence/d1/long-term
 import { createReminderRepository } from "../infrastructure/persistence/d1/reminders";
 import { createGenerationQueue } from "../infrastructure/queue/generation-queue";
 import { reserveSearch } from "../infrastructure/search/search-quota";
+import { createTavilyPageReader } from "../infrastructure/search/tavily-page-reader";
 import { createTavilyWebSearch } from "../infrastructure/search/tavily-web-search";
 import type { Bindings } from "./create-app";
 
@@ -57,6 +65,8 @@ export class FamilyConversationAgent extends DurableObject<Bindings> {
 	readonly lifecycle = Lifecycle.install(this).use(this.sessions);
 	private readonly store = new SessionConversationStore(this.ctx.storage.sql, this.sessions);
 	private readonly quickReplies = new QuickReplies(this.ctx.storage.sql);
+	private readonly questions = new PendingQuestions(this.ctx.storage.sql);
+	private readonly photos = new PhotoReferences(this.ctx.storage.sql);
 	private organizing = false;
 	private serial: Promise<unknown> = Promise.resolve();
 	private locked<T>(fn: () => Promise<T>): Promise<T> {
@@ -83,6 +93,27 @@ export class FamilyConversationAgent extends DurableObject<Bindings> {
 		let message = inbound;
 		const group = this.env.LINE_ALLOWED_GROUP_ID?.trim();
 		if (!group || message.groupId !== group || message.chatType !== "group") return;
+		if (message.unsend && message.messageId)
+			await this.locked(async () => this.photos.forget(message.messageId ?? ""));
+		if (message.image) {
+			if (!message.messageId || !message.eventId || message.occurredAt === undefined) return;
+			await this.locked(async () => {
+				const now = Date.now();
+				this.photos.record(message.messageId ?? "", message.occurredAt ?? now, now);
+				if (!this.photos.request(message.eventId ?? "", message.messageId ?? "", now)) return;
+				await this.ctx.storage.setAlarm(now + 3600000);
+				await createGenerationQueue(this.env.JOBS_QUEUE).enqueue({
+					eventId: message.eventId ?? "",
+					groupId: group,
+					imageId: message.messageId ?? "",
+					text: "",
+					replyToken: message.replyToken,
+					receivedAt: now,
+				});
+			});
+			return;
+		}
+
 		if (message.postback) {
 			const choice = await this.locked(async () =>
 				this.quickReplies.consume(message.postback ?? "", message.speaker, Date.now()),
@@ -186,7 +217,20 @@ export class FamilyConversationAgent extends DurableObject<Bindings> {
 			const replyToBot =
 				!!message.quotedMessageId &&
 				this.store.outgoing(message.quotedMessageId, now) !== undefined;
+			const followup =
+				!message.unsend &&
+				!message.mentioned &&
+				!message.quotedMessageId &&
+				!message.postback &&
+				!explicitReminderRequest(message.text) &&
+				message.speaker &&
+				message.text.length <= 2000
+					? this.questions.candidate(message.speaker, message.occurredAt ?? 0, now)
+					: undefined;
+			const bareLink = !message.unsend && !message.quotedMessageId && isBareUrl(message.text);
 			const candidate =
+				!followup &&
+				!bareLink &&
 				!message.unsend &&
 				!message.mentioned &&
 				!replyToBot &&
@@ -198,7 +242,8 @@ export class FamilyConversationAgent extends DurableObject<Bindings> {
 			if (passive) this.store.markScan(now);
 			const incoming = {
 				...message,
-				mentioned: message.mentioned || replyToBot,
+				mentioned: message.mentioned || replyToBot || bareLink,
+				...(followup && !bareLink ? { followupId: followup.id } : {}),
 				...(passive ? { passive: true } : {}),
 			};
 			await this.ctx.storage.setAlarm(Date.now() + 3600000);
@@ -373,6 +418,11 @@ export class FamilyConversationAgent extends DurableObject<Bindings> {
 		});
 	}
 	async answer(job: GenerationJob): Promise<void> {
+		if (job.imageId) {
+			await this.answerPhoto(job);
+			return;
+		}
+
 		if (job.groupId !== this.env.LINE_ALLOWED_GROUP_ID?.trim() || !job.memory) return;
 		const reference = job.memory;
 		const snapshot = await this.locked(async () => {
@@ -399,8 +449,49 @@ export class FamilyConversationAgent extends DurableObject<Bindings> {
 		let listsReady = false;
 		const latest = snapshot.messages.at(-1)?.text ?? "";
 		const proactive = job.passive === true && !explicitReminderRequest(latest);
+		const owner = snapshot.messages.at(-1)?.speaker ?? "unknown";
+		const followup = job.followupId
+			? this.questions.get(owner, job.followupId, Date.now())
+			: undefined;
+		if (
+			job.followupId &&
+			(!followup ||
+				!(await isQuestionReply(
+					followup.text,
+					latest,
+					this.generator(10_000),
+					JSON.stringify(
+						snapshot.messages
+							.slice(0, -1)
+							.filter((m) => m.occurredAt >= followup.created)
+							.slice(-6)
+							.map((m) => ({ role: m.role, speaker: m.speaker, text: m.text.slice(0, 500) })),
+					),
+				)))
+		)
+			return;
+		const hasLink = messageUrls(latest).length > 0;
 		try {
 			const deadline = Date.now() + 120_000;
+			if (hasLink) {
+				const result = await readLink(
+					latest,
+					JSON.stringify({
+						question: followup?.text,
+						history: snapshot.messages
+							.slice(-6)
+							.map((m) => ({ role: m.role, text: m.text.slice(0, 1000) })),
+					}),
+					this.env.TAVILY_API_KEY?.trim()
+						? createTavilyPageReader(this.env.TAVILY_API_KEY.trim())
+						: undefined,
+					this.generator(30_000),
+					async () => this.locked(async () => reserveSearch(this.ctx.storage.sql, Date.now())),
+				);
+				answer = result.text;
+				choices = result.choices;
+				generated = true;
+			}
 			const profiles = this.env.DB ? await createFamilyProfiles(this.env.DB).list(job.groupId) : [];
 			const profileContext = profiles.map(({ speaker, names, pending, version }) => ({
 				speaker,
@@ -408,7 +499,7 @@ export class FamilyConversationAgent extends DurableObject<Bindings> {
 				pending,
 				version,
 			}));
-			if (this.env.DB) {
+			if (this.env.DB && !hasLink) {
 				const existing = await createReminderRepository(this.env.DB).list(job.groupId);
 				listsReady = await familyListsReady(this.env.DB);
 				const listState = listsReady
@@ -419,7 +510,7 @@ export class FamilyConversationAgent extends DurableObject<Bindings> {
 					? this.store.outgoing(job.quotedMessageId, Date.now())
 					: undefined;
 				const plan = await this.generator(30_000).generate({
-					system: reminderPlannerPrompt + participationPrompt,
+					system: reminderPlannerPrompt + participationPrompt + followupContextPrompt,
 					messages: [
 						{
 							role: "user",
@@ -437,6 +528,7 @@ export class FamilyConversationAgent extends DurableObject<Bindings> {
 								passive: job.passive === true,
 								latest,
 								quoted,
+								followupQuestion: followup?.text,
 								history: snapshot.messages
 									.slice(-6)
 									.map((m) => ({ role: m.role, speaker: m.speaker, text: m.text.slice(0, 1000) })),
@@ -476,7 +568,7 @@ export class FamilyConversationAgent extends DurableObject<Bindings> {
 				)
 					return;
 			}
-			if (!operation) {
+			if (!operation && !answer) {
 				const facts = this.env.DB
 					? await createLongTermMemory(this.env.DB).list(job.groupId, Date.now())
 					: [];
@@ -506,9 +598,9 @@ export class FamilyConversationAgent extends DurableObject<Bindings> {
 					}),
 				);
 
-				const quote = job.quotedMessageId
-					? this.store.outgoing(job.quotedMessageId, Date.now())
-					: undefined;
+				const quote =
+					followup?.text ??
+					(job.quotedMessageId ? this.store.outgoing(job.quotedMessageId, Date.now()) : undefined);
 				if (quote)
 					input.messages.unshift({
 						role: "user",
@@ -544,6 +636,8 @@ export class FamilyConversationAgent extends DurableObject<Bindings> {
 			await this.store.prune(Date.now());
 			const meta = this.store.meta();
 			if (meta.epoch !== snapshot.epoch || meta.revision !== snapshot.revision) return;
+			if (job.followupId && !this.questions.get(owner, job.followupId, Date.now())) return;
+			this.quickReplies.clearOwner(owner);
 			let proposalButtons: QuickReply[] | undefined;
 			if (operation?.action === "collection" && !listsReady) {
 				answer = "共有リストは準備中です。データベースの更新が完了してから、もう一度お願いします。";
@@ -624,7 +718,7 @@ export class FamilyConversationAgent extends DurableObject<Bindings> {
 								choice: {
 									kind: "conversation" as const,
 									text: label,
-									question: text.slice(0, 500),
+									question: text.replace(/https?:\/\/[^\s]+/g, "").slice(0, 1000),
 								},
 							})),
 							speaker,
@@ -632,6 +726,18 @@ export class FamilyConversationAgent extends DurableObject<Bindings> {
 						)
 					: undefined;
 			await sender.reply(job.replyToken, text, proposalButtons ?? buttons);
+			this.questions.remove(owner);
+			if (
+				generated &&
+				!proposalButtons &&
+				owner !== "unknown" &&
+				(operation?.action === "clarify" ||
+					choices.length ||
+					/[？?]|教えて(?:ください|もらえ|ね)|選んでください/.test(
+						text.replace(/https?:\/\/[^\s]+/g, ""),
+					))
+			)
+				this.questions.set(owner, text, Date.now());
 			if (generated) {
 				const now = Date.now();
 				await this.store.append(
@@ -649,10 +755,34 @@ export class FamilyConversationAgent extends DurableObject<Bindings> {
 			}
 		});
 	}
+
+	private async answerPhoto(job: GenerationJob) {
+		const id = job.imageId;
+		if (!id || job.groupId !== this.env.LINE_ALLOWED_GROUP_ID?.trim()) return;
+		const allowed = await this.locked(async () => this.photos.valid(job.eventId, id, Date.now()));
+		if (!allowed) return;
+		const text = await analyzePhoto(
+			id,
+			createLineImageReader(this.env.LINE_CHANNEL_ACCESS_TOKEN ?? ""),
+			this.generator(),
+		);
+		await this.locked(async () => {
+			if (!this.photos.valid(job.eventId, id, Date.now())) return;
+			await createLineAnswerSender(
+				this.env.LINE_CHANNEL_ACCESS_TOKEN ?? "",
+				job,
+				fetch,
+				diagnostics,
+			).reply(job.replyToken, text);
+			this.photos.finish(job.eventId);
+		});
+	}
 	private async flushMemoryDeletions(group: string) {
 		const pending = this.store.pendingMemoryDeletions();
 		if (!pending.length) return;
 		this.quickReplies.clear();
+		this.questions.clear();
+		this.photos.clear();
 		if (!this.env.DB) return;
 		const repo = createLongTermMemory(this.env.DB);
 		if (pending.includes("profiles:*")) await createFamilyProfiles(this.env.DB).clear(group);
@@ -746,7 +876,9 @@ export class FamilyConversationAgent extends DurableObject<Bindings> {
 		await this.locked(() => deliverReminder(repo, sender, job, group, Date.now()));
 	}
 	async alarm() {
+		this.questions.prune(Date.now());
 		this.quickReplies.prune(Date.now());
+		this.photos.prune(Date.now());
 		await this.locked(() => this.store.prune(Date.now()));
 		await this.ctx.storage.setAlarm(Date.now() + 3600000);
 	}

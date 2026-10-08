@@ -53,6 +53,10 @@ Acceptedは設計の採用を示し、本番配備の完了は意味しない。
 
 | [0025](0025-family-lists.md) | 通知と独立した共有リスト | 採用 |
 
+| [0026](0026-photo-understanding.md) | 写真の自動読み取りと非永続化 | 採用 |
+
+| [0027](0027-links-and-followups.md) | URL参照と通常チャットでの質問への返答 | 採用 |
+
 ## 書き方
 
 [template.md](template.md)の5項目を使い、判断・理由・主要な制約を簡潔に書く。

@@ -1,3 +1,4 @@
+import type { ImageContent } from "../ports/image-content";
 export interface ConversationMessage {
 	id: string;
 	role: "user" | "assistant";
@@ -8,7 +9,7 @@ export interface ConversationMessage {
 }
 export interface GenerationInput {
 	system: string;
-	messages: { role: "user" | "assistant"; content: string }[];
+	messages: { role: "user" | "assistant"; content: string; image?: ImageContent }[];
 }
 export interface MemoryReference {
 	messageId: string;

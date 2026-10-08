@@ -122,3 +122,16 @@ it("accepts list deletion only from the confirmation recipient and consumes the 
 		}
 	});
 });
+
+it("detects incomplete schema without treating it as empty lists", async () => {
+	const { familyListsReady } = await import("../../src/infrastructure/persistence/d1/family-lists");
+	expect(await familyListsReady(db)).toBe(true);
+	await db.exec("DROP TABLE family_list_events");
+	try {
+		expect(await familyListsReady(db)).toBe(false);
+	} finally {
+		await db.exec(
+			"CREATE TABLE family_list_events(group_id TEXT NOT NULL,event_id TEXT NOT NULL,PRIMARY KEY(group_id,event_id))",
+		);
+	}
+});

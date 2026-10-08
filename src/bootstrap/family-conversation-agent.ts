@@ -41,7 +41,7 @@ import { createLineReplySender } from "../infrastructure/line/reply-sender";
 import { QuickReplies } from "../infrastructure/memory/quick-replies";
 import { SessionConversationStore } from "../infrastructure/memory/session-conversation-store";
 import { diagnostics } from "../infrastructure/observability/diagnostics";
-import { createFamilyLists } from "../infrastructure/persistence/d1/family-lists";
+import { createFamilyLists, familyListsReady } from "../infrastructure/persistence/d1/family-lists";
 import { createFamilyProfiles } from "../infrastructure/persistence/d1/family-profiles";
 import { createGarbageScheduleStore } from "../infrastructure/persistence/d1/garbage-schedule";
 import { createImprovementRepository } from "../infrastructure/persistence/d1/improvement-repository";
@@ -396,6 +396,7 @@ export class FamilyConversationAgent extends DurableObject<Bindings> {
 		let generated = false;
 		let inspectSchedules = false;
 		let listVersion = 0;
+		let listsReady = false;
 		const latest = snapshot.messages.at(-1)?.text ?? "";
 		const proactive = job.passive === true && !explicitReminderRequest(latest);
 		try {
@@ -409,7 +410,10 @@ export class FamilyConversationAgent extends DurableObject<Bindings> {
 			}));
 			if (this.env.DB) {
 				const existing = await createReminderRepository(this.env.DB).list(job.groupId);
-				const listState = await createFamilyLists(this.env.DB).load(job.groupId);
+				listsReady = await familyListsReady(this.env.DB);
+				const listState = listsReady
+					? await createFamilyLists(this.env.DB).load(job.groupId)
+					: { version: 0, lists: [] };
 				listVersion = listState.version;
 				const quoted = job.quotedMessageId
 					? this.store.outgoing(job.quotedMessageId, Date.now())
@@ -422,6 +426,7 @@ export class FamilyConversationAgent extends DurableObject<Bindings> {
 							content: JSON.stringify({
 								now: new Date(Date.now() + 9 * 3600000).toISOString().replace("Z", "+09:00"),
 								profiles: profileContext,
+								collectionsAvailable: listsReady,
 								collections: listState.lists.map((l) => ({
 									id: l.id,
 									name: l.name,
@@ -540,7 +545,10 @@ export class FamilyConversationAgent extends DurableObject<Bindings> {
 			const meta = this.store.meta();
 			if (meta.epoch !== snapshot.epoch || meta.revision !== snapshot.revision) return;
 			let proposalButtons: QuickReply[] | undefined;
-			if (operation?.action === "collection" && operation.collection && this.env.DB) {
+			if (operation?.action === "collection" && !listsReady) {
+				answer = "共有リストは準備中です。データベースの更新が完了してから、もう一度お願いします。";
+				generated = true;
+			} else if (operation?.action === "collection" && operation.collection && this.env.DB) {
 				const result = await manageLists(
 					createFamilyLists(this.env.DB),
 					job.groupId,

@@ -34,3 +34,12 @@ export function createFamilyLists(db: D1Database): FamilyLists {
 		},
 	};
 }
+
+export async function familyListsReady(db: D1Database): Promise<boolean> {
+	const row = await db
+		.prepare(
+			"SELECT COUNT(*) AS n FROM sqlite_master WHERE type='table' AND name IN ('family_list_state','family_list_events')",
+		)
+		.first<{ n: number }>();
+	return row?.n === 2;
+}

@@ -34,9 +34,12 @@ import type { ReminderJob } from "../application/ports/reminder-repository";
 import { AiUsageLimitError } from "../application/ports/text-generator";
 import { followupContextPrompt } from "../application/prompts/links";
 import { participationPrompt, reminderPlannerPrompt } from "../application/prompts/reminders";
+import { taskPlannerPrompt } from "../application/prompts/tasks";
 import { deliverReminder } from "../application/reminders/deliver-reminder";
 import { manageReminders, parseReminderAction } from "../application/reminders/manage-reminders";
 import type { ReminderAction } from "../application/reminders/manage-reminders";
+import { deliverTasks } from "../application/tasks/deliver-tasks";
+import { manageTasks } from "../application/tasks/manage-tasks";
 import { createGeminiTextGenerator } from "../infrastructure/ai/gemini-text-generator";
 import { createImprovementDispatcher } from "../infrastructure/github/improvement-dispatcher";
 import { createLineAnswerSender } from "../infrastructure/line/answer-sender";
@@ -50,6 +53,7 @@ import { SessionConversationStore } from "../infrastructure/memory/session-conve
 import { diagnostics } from "../infrastructure/observability/diagnostics";
 import { createFamilyLists, familyListsReady } from "../infrastructure/persistence/d1/family-lists";
 import { createFamilyProfiles } from "../infrastructure/persistence/d1/family-profiles";
+import { createFamilyTasks, familyTasksReady } from "../infrastructure/persistence/d1/family-tasks";
 import { createGarbageScheduleStore } from "../infrastructure/persistence/d1/garbage-schedule";
 import { createImprovementRepository } from "../infrastructure/persistence/d1/improvement-repository";
 import { createLongTermMemory } from "../infrastructure/persistence/d1/long-term-memory";
@@ -127,6 +131,29 @@ export class FamilyConversationAgent extends DurableObject<Bindings> {
 					message.replyToken,
 					"この選択は期限切れ・処理済み、または別の人への質問です。もう一度話しかけてください。",
 				);
+				return;
+			}
+			if (choice.kind === "task_complete") {
+				const text = await this.locked(async () => {
+					if (choice.owner !== message.speaker)
+						return "この完了ボタンは別の担当者の分です。自分のボタンを選んでください。";
+					if (!this.env.DB || !(await familyTasksReady(this.env.DB)))
+						return "タスク機能は準備中です。";
+					return manageTasks(
+						createFamilyTasks(this.env.DB),
+						group,
+						message.eventId ?? "",
+						{ op: "complete", id: choice.taskId, occurrenceId: choice.occurrenceId },
+						choice.owner,
+						[],
+						Date.now(),
+					);
+				});
+				await createLineReplySender(
+					this.env.LINE_CHANNEL_ACCESS_TOKEN ?? "",
+					fetch,
+					diagnostics,
+				).reply(message.replyToken, text);
 				return;
 			}
 			if (choice.kind === "improvement" && !choice.approve && this.env.DB) {
@@ -447,6 +474,8 @@ export class FamilyConversationAgent extends DurableObject<Bindings> {
 		let inspectSchedules = false;
 		let listVersion = 0;
 		let listsReady = false;
+		let tasksReady = false;
+		let taskVersion = 0;
 		const latest = snapshot.messages.at(-1)?.text ?? "";
 		const proactive = job.passive === true && !explicitReminderRequest(latest);
 		const owner = snapshot.messages.at(-1)?.speaker ?? "unknown";
@@ -501,6 +530,11 @@ export class FamilyConversationAgent extends DurableObject<Bindings> {
 				version,
 			}));
 			if (this.env.DB && !hasLink) {
+				tasksReady = await familyTasksReady(this.env.DB);
+				const taskState = tasksReady
+					? await createFamilyTasks(this.env.DB).load(job.groupId)
+					: { version: 0, tasks: [] };
+				taskVersion = taskState.version;
 				const existing = await createReminderRepository(this.env.DB).list(job.groupId);
 				listsReady = await familyListsReady(this.env.DB);
 				const listState = listsReady
@@ -511,13 +545,19 @@ export class FamilyConversationAgent extends DurableObject<Bindings> {
 					? this.store.outgoing(job.quotedMessageId, Date.now())
 					: undefined;
 				const plan = await this.generator(30_000).generate({
-					system: reminderPlannerPrompt + participationPrompt + followupContextPrompt,
+					system:
+						reminderPlannerPrompt + participationPrompt + followupContextPrompt + taskPlannerPrompt,
 					messages: [
 						{
 							role: "user",
 							content: JSON.stringify({
 								now: new Date(Date.now() + 9 * 3600000).toISOString().replace("Z", "+09:00"),
 								profiles: profileContext,
+								tasksAvailable: tasksReady,
+								tasks: taskState.tasks.map((t) => ({
+									...t,
+									occurrences: t.occurrences.filter((o) => o.doneAt === null).slice(0, 50),
+								})),
 								collectionsAvailable: listsReady,
 								collections: listState.lists.map((l) => ({
 									id: l.id,
@@ -549,7 +589,7 @@ export class FamilyConversationAgent extends DurableObject<Bindings> {
 					],
 				});
 				operation = parseReminderAction(plan);
-				if (job.passive && ["improve", "collection"].includes(operation.action)) return;
+				if (job.passive && ["improve", "collection", "task"].includes(operation.action)) return;
 				if (operation.action === "inspect") {
 					inspectSchedules = !job.passive;
 					operation = { action: "none" };
@@ -640,7 +680,22 @@ export class FamilyConversationAgent extends DurableObject<Bindings> {
 			if (job.followupId && !this.questions.get(owner, job.followupId, Date.now())) return;
 			this.quickReplies.clearOwner(owner);
 			let proposalButtons: QuickReply[] | undefined;
-			if (operation?.action === "collection" && !listsReady) {
+			if (operation?.action === "task") {
+				answer =
+					!tasksReady || !this.env.DB
+						? "タスク機能は準備中です。データベースの更新をお待ちください。"
+						: await manageTasks(
+								createFamilyTasks(this.env.DB),
+								job.groupId,
+								job.eventId,
+								operation.task ?? { op: "list" },
+								owner,
+								await createFamilyProfiles(this.env.DB).list(job.groupId),
+								Date.now(),
+								taskVersion,
+							);
+				generated = true;
+			} else if (operation?.action === "collection" && !listsReady) {
 				answer = "共有リストは準備中です。データベースの更新が完了してから、もう一度お願いします。";
 				generated = true;
 			} else if (operation?.action === "collection" && operation.collection && this.env.DB) {
@@ -876,6 +931,61 @@ export class FamilyConversationAgent extends DurableObject<Bindings> {
 		);
 		await this.locked(() => deliverReminder(repo, sender, job, group, Date.now()));
 	}
+	async deliverTasks() {
+		const group = this.env.LINE_ALLOWED_GROUP_ID?.trim();
+		if (!group || !this.env.DB || !this.env.LINE_CHANNEL_ACCESS_TOKEN)
+			throw new Error("Missing task configuration");
+		const db = this.env.DB;
+		if (!(await familyTasksReady(db))) return;
+		await this.locked(async () => {
+			const now = Date.now();
+			await deliverTasks(
+				createFamilyTasks(db),
+				createLinePushSender(
+					this.env.LINE_CHANNEL_ACCESS_TOKEN ?? "",
+					fetch,
+					diagnostics,
+					async (id, text) => {
+						this.store.recordOutgoing(id, text, Date.now());
+					},
+				),
+				group,
+				now,
+				(task) => {
+					const firstPerOwner = task.members
+						.map((m) => ({
+							member: m,
+							occurrence: task.occurrences.find(
+								(o) => o.speaker === m.speaker && o.doneAt === null && o.dueAt <= now,
+							),
+						}))
+						.filter((x) => x.occurrence);
+					// Each owner gets a separate batch; completing one must not consume another person's button.
+					return firstPerOwner.flatMap(({ member, occurrence }) =>
+						occurrence
+							? this.quickReplies.issue(
+									[
+										{
+											label: `${member.name.slice(0, 12)}さん完了`,
+											choice: {
+												kind: "task_complete",
+												taskId: task.id,
+												occurrenceId: occurrence.id,
+												owner: member.speaker,
+											},
+										},
+									],
+									member.speaker,
+									now,
+									23 * 3600000,
+								)
+							: [],
+					);
+				},
+			);
+		});
+	}
+
 	async alarm() {
 		this.questions.prune(Date.now());
 		this.quickReplies.prune(Date.now());

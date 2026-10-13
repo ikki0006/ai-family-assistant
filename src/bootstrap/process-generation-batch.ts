@@ -52,6 +52,20 @@ export async function processGenerationBatch(
 				message.ack();
 				continue;
 			}
+			if (
+				typeof message.body === "object" &&
+				message.body !== null &&
+				"type" in message.body &&
+				message.body.type === "tasks"
+			) {
+				const group = "groupId" in message.body ? message.body.groupId : undefined;
+				if (typeof group === "string" && group === env.LINE_ALLOWED_GROUP_ID?.trim()) {
+					if (!env.CONVERSATIONS) throw new Error("Missing conversations binding");
+					await env.CONVERSATIONS.get(env.CONVERSATIONS.idFromName(group)).deliverTasks();
+				}
+				message.ack();
+				continue;
+			}
 			const job = parseGenerationJob(message.body);
 			const now = Date.now();
 			if (

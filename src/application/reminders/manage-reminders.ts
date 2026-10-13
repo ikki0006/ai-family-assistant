@@ -9,6 +9,7 @@ import type { Recurrence, Reminder, Schedule } from "../../domain/reminders/recu
 import { validChoices } from "../conversation/reply-choices";
 import { type ListAction, parseListAction } from "../lists/manage-lists";
 import type { ReminderRepository } from "../ports/reminder-repository";
+import { type TaskAction, parseTaskAction } from "../tasks/manage-tasks";
 export type ReminderAction = Partial<Recurrence> & {
 	action:
 		| "none"
@@ -16,6 +17,7 @@ export type ReminderAction = Partial<Recurrence> & {
 		| "inspect"
 		| "improve"
 		| "collection"
+		| "task"
 		| "list"
 		| "create"
 		| "update"
@@ -23,6 +25,7 @@ export type ReminderAction = Partial<Recurrence> & {
 		| "resume"
 		| "delete";
 	collection?: ListAction;
+	task?: TaskAction;
 	question?: string;
 	specification?: string;
 	choices?: string[];
@@ -48,6 +51,7 @@ export function parseReminderAction(raw: string): ReminderAction {
 			"inspect",
 			"improve",
 			"collection",
+			"task",
 			"list",
 			"create",
 			"update",
@@ -85,6 +89,7 @@ export function parseReminderAction(raw: string): ReminderAction {
 			o.specification.length > 1500)
 	)
 		throw new Error("Invalid improvement specification");
+	if (o.action === "task") o.task = parseTaskAction(o.task);
 	if (o.action === "collection") o.collection = parseListAction(o.collection);
 	return o as ReminderAction;
 }
@@ -102,7 +107,8 @@ export async function manageReminders(
 		action.action === "none" ||
 		action.action === "inspect" ||
 		action.action === "improve" ||
-		action.action === "collection"
+		action.action === "collection" ||
+		action.action === "task"
 	)
 		return null;
 	if (action.action === "clarify") return action.question || "通知の内容と日時を教えてください。";

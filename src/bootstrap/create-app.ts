@@ -19,6 +19,7 @@ export interface Bindings {
 			receive(message: IncomingText): Promise<void>;
 			answer(job: GenerationJob): Promise<void>;
 			deliver(job: ReminderJob): Promise<void>;
+			deliverTasks(): Promise<void>;
 			scheduleMemory(now: number): Promise<void>;
 			organize(token: string): Promise<void>;
 			recordSent(id: string, text: string): Promise<void>;

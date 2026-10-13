@@ -57,6 +57,8 @@ Acceptedは設計の採用を示し、本番配備の完了は意味しない。
 
 | [0027](0027-links-and-followups.md) | URL参照と通常チャットでの質問への返答 | 採用 |
 
+| [0028](0028-assigned-recurring-tasks.md) | 担当者別・周期別タスクと未完了の毎日通知 | 採用 |
+
 ## 書き方
 
 [template.md](template.md)の5項目を使い、判断・理由・主要な制約を簡潔に書く。

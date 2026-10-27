@@ -59,6 +59,10 @@ Acceptedは設計の採用を示し、本番配備の完了は意味しない。
 
 | [0028](0028-assigned-recurring-tasks.md) | 担当者別・周期別タスクと未完了の毎日通知 | 採用 |
 
+| [0029](0029-read-only-source-consultation.md) | 改善相談の読み取り専用ソース調査 | 採用 |
+
+| [0030](0030-complexity-and-dependency-maintenance.md) | 関数単位の複雑度制限と依存更新 | 採用 |
+
 ## 書き方
 
 [template.md](template.md)の5項目を使い、判断・理由・主要な制約を簡潔に書く。

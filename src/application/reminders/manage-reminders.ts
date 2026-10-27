@@ -15,6 +15,7 @@ export type ReminderAction = Partial<Recurrence> & {
 		| "none"
 		| "clarify"
 		| "inspect"
+		| "inspect_code"
 		| "improve"
 		| "collection"
 		| "task"
@@ -49,6 +50,7 @@ export function parseReminderAction(raw: string): ReminderAction {
 			"none",
 			"clarify",
 			"inspect",
+			"inspect_code",
 			"improve",
 			"collection",
 			"task",

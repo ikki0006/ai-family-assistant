@@ -510,6 +510,7 @@ it("turns contextual improvement intent into buttons without dispatching, but ig
 		await runInDurableObject(
 			ns.get(ns.idFromName(crypto.randomUUID())),
 			async (instance, state) => {
+				let aiCalls = 0;
 				const run = vi.fn(async () =>
 					Response.json({
 						candidates: [
@@ -518,10 +519,14 @@ it("turns contextual improvement intent into buttons without dispatching, but ig
 								content: {
 									parts: [
 										{
-											text: JSON.stringify({
-												action: "improve",
-												specification: "通知の確認を短いボタンで回答できるようにする",
-											}),
+											text: JSON.stringify(
+												++aiCalls === 2
+													? ["src/application/prompts/reminders.ts"]
+													: {
+															action: "improve",
+															specification: "通知の確認を短いボタンで回答できるようにする",
+														},
+											),
 										},
 									],
 								},
@@ -561,6 +566,19 @@ it("turns contextual improvement intent into buttons without dispatching, but ig
 				const original = globalThis.fetch;
 				const sent: string[] = [];
 				globalThis.fetch = async (url, init) => {
+					if (
+						String(url).startsWith("https://api.github.com/repos/ikki0006/ai-family-assistant/")
+					) {
+						expect(passive).toBe(false);
+						if (String(url).endsWith("commits/main")) return Response.json({ sha: "a".repeat(40) });
+						if (String(url).includes("git/trees/"))
+							return Response.json({
+								tree: [
+									{ path: "src/application/prompts/reminders.ts", mode: "100644", type: "blob" },
+								],
+							});
+						return new Response("reference source");
+					}
 					expect(String(url)).toContain("api.line.me");
 					sent.push(String(init?.body));
 					return Response.json({});

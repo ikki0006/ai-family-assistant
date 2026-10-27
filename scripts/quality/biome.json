@@ -1,0 +1,13 @@
+{
+	"extends": ["../../biome.json"],
+	"linter": {
+		"rules": {
+			"complexity": {
+				"noExcessiveCognitiveComplexity": {
+					"level": "error",
+					"options": { "maxAllowedComplexity": 15 }
+				}
+			}
+		}
+	}
+}

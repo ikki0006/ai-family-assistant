@@ -3,6 +3,7 @@ import { Lifecycle } from "agents/lifecycle";
 import { Sessions } from "agents/sessions";
 import { answerWithSearch } from "../application/conversation/answer-with-search";
 import { buildContext, contextSize } from "../application/conversation/build-context";
+import type { ConversationMessage } from "../application/conversation/conversation";
 import { isBareUrl, messageUrls } from "../application/conversation/message-url";
 import {
 	explicitReminderRequest,
@@ -16,6 +17,7 @@ import {
 	createRespondToMention,
 } from "../application/conversation/respond-to-mention";
 import { scheduleContext } from "../application/conversation/schedule-context";
+import { consultSource } from "../application/improvements/consult-source";
 import { handleImprovement } from "../application/improvements/handle-improvement";
 import { manageLists } from "../application/lists/manage-lists";
 import {
@@ -42,6 +44,7 @@ import { deliverTasks } from "../application/tasks/deliver-tasks";
 import { manageTasks } from "../application/tasks/manage-tasks";
 import { createGeminiTextGenerator } from "../infrastructure/ai/gemini-text-generator";
 import { createImprovementDispatcher } from "../infrastructure/github/improvement-dispatcher";
+import { createSourceRepository } from "../infrastructure/github/source-repository";
 import { createLineAnswerSender } from "../infrastructure/line/answer-sender";
 import { createLineImageReader } from "../infrastructure/line/image-content";
 import { createLinePushSender } from "../infrastructure/line/push-sender";
@@ -203,11 +206,7 @@ export class FamilyConversationAgent extends DurableObject<Bindings> {
 						: `「${choice.question}」への回答: ${choice.text}`,
 			};
 		}
-		if (
-			message.mentioned &&
-			!message.unsend &&
-			/^(?:(?:改善|改良)[:：]|改善承認(?:\s|$))/.test(message.text.trim())
-		) {
+		if (message.mentioned && !message.unsend && /^改善承認(?:\s|$)/.test(message.text.trim())) {
 			await this.ctx.storage.setAlarm(Date.now() + 3600000);
 			let response = "自動改善の設定がまだ完了していません。";
 			let buttons: QuickReply[] | undefined;
@@ -589,7 +588,12 @@ export class FamilyConversationAgent extends DurableObject<Bindings> {
 					],
 				});
 				operation = parseReminderAction(plan);
-				if (job.passive && ["improve", "collection", "task"].includes(operation.action)) return;
+				if (
+					job.passive &&
+					["improve", "inspect_code", "collection", "task"].includes(operation.action)
+				)
+					return;
+				operation = await this.consultOperation(operation, latest, snapshot.messages, deadline);
 				if (operation.action === "inspect") {
 					inspectSchedules = !job.passive;
 					operation = { action: "none" };
@@ -984,6 +988,24 @@ export class FamilyConversationAgent extends DurableObject<Bindings> {
 				},
 			);
 		});
+	}
+
+	private async consultOperation(
+		operation: ReminderAction,
+		latest: string,
+		messages: ConversationMessage[],
+		deadline: number,
+	): Promise<ReminderAction> {
+		if (operation.action !== "improve" && operation.action !== "inspect_code") return operation;
+		return consultSource(
+			latest,
+			JSON.stringify(
+				messages.slice(-6).map((m) => ({ role: m.role, text: m.text.slice(0, 1000) })),
+			),
+			operation.action === "improve",
+			createSourceRepository(),
+			{ generate: (input) => this.generator(Math.max(1, deadline - Date.now())).generate(input) },
+		);
 	}
 
 	async alarm() {

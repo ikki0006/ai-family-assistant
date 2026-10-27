@@ -1,8 +1,11 @@
 import { env } from "cloudflare:workers";
 import { beforeAll, beforeEach, expect, it } from "vitest";
+import reminderMigration from "../../migrations/0003_reminders.sql?raw";
 import migration from "../../migrations/0004_improvements.sql?raw";
+import calendarMigration from "../../migrations/0006_calendar_reminders.sql?raw";
 import profileMigration from "../../migrations/0007_family_profiles.sql?raw";
 import listMigration from "../../migrations/0008_family_lists.sql?raw";
+import type { GenerationJob } from "../../src/application/ports/generation-queue";
 import { createImprovementRepository } from "../../src/infrastructure/persistence/d1/improvement-repository";
 
 const db = (env as unknown as { DB: D1Database }).DB;
@@ -10,6 +13,8 @@ const repository = createImprovementRepository(db);
 beforeAll(async () => {
 	await (env as unknown as { DB: D1Database }).DB.exec(profileMigration.replace(/\n/g, " "));
 	await (env as unknown as { DB: D1Database }).DB.exec(listMigration.replace(/\n/g, " "));
+	await db.exec(reminderMigration.replace(/\n/g, " "));
+	await db.exec(calendarMigration.replace(/\n/g, " "));
 	await db.exec(migration.replace(/\n/g, " "));
 });
 beforeEach(async () => {
@@ -51,12 +56,43 @@ it("approves a displayed proposal by postback once, and cancellation prevents ap
 		}
 	).CONVERSATIONS;
 	await runInDurableObject(ns.get(ns.idFromName(crypto.randomUUID())), async (instance, state) => {
+		const jobs: GenerationJob[] = [];
+		let aiCalls = 0;
 		Object.defineProperty(instance, "env", {
 			value: {
 				DB: db,
 				LINE_ALLOWED_GROUP_ID: "group",
 				LINE_CHANNEL_ACCESS_TOKEN: "test",
 				GH_IMPROVEMENT_TOKEN: "test",
+				JOBS_QUEUE: {
+					send: async (job: GenerationJob) => {
+						jobs.push(job);
+					},
+				},
+				AI_GATEWAY_ID: "test",
+				AI: {
+					gateway: () => ({
+						run: async () =>
+							Response.json({
+								candidates: [
+									{
+										finishReason: "STOP",
+										content: {
+											parts: [
+												{
+													text: JSON.stringify(
+														++aiCalls % 3 === 2
+															? ["src/application/prompts/reminders.ts"]
+															: { action: "improve", specification: "回答を短くしてください" },
+													),
+												},
+											],
+										},
+									},
+								],
+							}),
+					}),
+				},
 			},
 			configurable: true,
 		});
@@ -67,6 +103,14 @@ it("approves a displayed proposal by postback once, and cancellation prevents ap
 		}> = [];
 		let dispatched = 0;
 		globalThis.fetch = async (url, init) => {
+			if (String(url).startsWith("https://api.github.com/") && init?.method === "GET") {
+				if (String(url).endsWith("commits/main")) return Response.json({ sha: "a".repeat(40) });
+				if (String(url).includes("git/trees/"))
+					return Response.json({
+						tree: [{ path: "src/application/prompts/reminders.ts", mode: "100644", type: "blob" }],
+					});
+				return new Response("reference source");
+			}
 			if (String(url).startsWith("https://api.github.com/")) {
 				dispatched++;
 				return new Response(null, { status: 204 });
@@ -83,8 +127,12 @@ it("approves a displayed proposal by postback once, and cancellation prevents ap
 				text: "改善: 回答を短くしてください",
 				replyToken: "r",
 				eventId: "proposal",
+				messageId: "proposal-message",
+				occurredAt: Date.now(),
 			};
 			await instance.receive(base);
+			expect(messages).toHaveLength(0);
+			await instance.answer(jobs.shift() as GenerationJob);
 			expect(dispatched).toBe(0);
 			expect(messages[0]?.text).toContain("回答を短くしてください");
 			const approve = messages[0]?.quickReply?.items[0]?.action.data ?? "";
@@ -106,7 +154,8 @@ it("approves a displayed proposal by postback once, and cancellation prevents ap
 			});
 			expect(dispatched).toBe(1);
 			expect(new QuickReplies(state.storage.sql).consume(cancel, "first", Date.now())).toBeNull();
-			await instance.receive({ ...base, eventId: "other-proposal" });
+			await instance.receive({ ...base, eventId: "other-proposal", messageId: "other-message" });
+			await instance.answer(jobs.shift() as GenerationJob);
 			const last = messages.at(-1);
 			const cancelledApprove = last?.quickReply?.items[0]?.action.data ?? "";
 			await instance.receive({

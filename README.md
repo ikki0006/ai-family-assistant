@@ -39,7 +39,8 @@ GoogleキーはGatewayのStored Keysへ登録する。[初回設定](docs/deploy
 
 | コマンド | 内容 |
 | --- | --- |
-| `pnpm check` | Biome・依存方向・ADR形式。書換えなし |
+| `pnpm check` | Biome・複雑度・依存方向・ADR形式。書換えなし |
+| `pnpm check:complexity` | 新規関数は認知的複雑度15以下、既存超過は悪化禁止（[方針](docs/adr/0030-complexity-and-dependency-maintenance.md)） |
 | `pnpm fix` | Biomeの自動修正・整形 |
 | `pnpm typecheck` | アプリとruntime非依存層の型検査 |
 | `pnpm test` | 単体テスト |

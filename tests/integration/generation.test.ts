@@ -105,3 +105,33 @@ it("sends a failed delivery toward the DLQ and never regenerates that event", as
 	await processGenerationBatch(batch(), bindings, fetcher);
 	expect(fetcher).toHaveBeenCalledOnce();
 });
+
+it("acks ignored jobs, retries malformed or unavailable jobs, and continues the batch", async () => {
+	const original = batch();
+	const template = original.messages[0];
+	if (!template) throw new Error("Missing fixture");
+	const bodies: unknown[] = [
+		{ type: "memory", groupId: group, token: 123 },
+		{ type: "tasks", groupId: "other-family" },
+		{ type: "tasks", groupId: group },
+		{ type: "reminder", groupId: group },
+		template.body,
+	];
+	const messages = bodies.map((body, index) => ({
+		...template,
+		id: `mixed-${index}`,
+		body,
+		ack: vi.fn(),
+		retry: vi.fn(),
+	}));
+	await processGenerationBatch({ ...original, messages }, bindings, transport());
+	for (const index of [0, 1, 4]) {
+		expect(messages[index]?.ack).toHaveBeenCalledOnce();
+		expect(messages[index]?.retry).not.toHaveBeenCalled();
+	}
+	for (const index of [2, 3]) {
+		expect(messages[index]?.retry).toHaveBeenCalledOnce();
+		expect(messages[index]?.ack).not.toHaveBeenCalled();
+	}
+	expect(run).toHaveBeenCalledOnce();
+});

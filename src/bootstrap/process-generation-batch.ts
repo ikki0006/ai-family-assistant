@@ -7,6 +7,69 @@ import { parseGenerationJob } from "../presentation/queue/generation-job";
 import { parseReminderJob } from "../presentation/queue/reminder-job";
 import type { Bindings } from "./create-app";
 
+function conversation(env: Bindings, group: string) {
+	if (!env.CONVERSATIONS) throw new Error("Missing conversations binding");
+	return env.CONVERSATIONS.get(env.CONVERSATIONS.idFromName(group));
+}
+
+async function processMemory(body: Record<string, unknown>, env: Bindings) {
+	if (typeof body.groupId !== "string" || typeof body.token !== "string" || body.token.length > 100)
+		return;
+	if (body.groupId !== env.LINE_ALLOWED_GROUP_ID?.trim()) return;
+	await conversation(env, body.groupId).organize(body.token);
+}
+
+async function processTypedJob(body: unknown, env: Bindings): Promise<boolean> {
+	if (typeof body !== "object" || body === null || !("type" in body)) return false;
+	switch (body.type) {
+		case "memory":
+			await processMemory(body, env);
+			return true;
+		case "reminder": {
+			const job = parseReminderJob(body);
+			if (job.groupId === env.LINE_ALLOWED_GROUP_ID?.trim())
+				await conversation(env, job.groupId).deliver(job);
+			return true;
+		}
+		case "tasks": {
+			const group = "groupId" in body ? body.groupId : undefined;
+			if (typeof group === "string" && group === env.LINE_ALLOWED_GROUP_ID?.trim())
+				await conversation(env, group).deliverTasks();
+			return true;
+		}
+		default:
+			return false;
+	}
+}
+
+async function processGeneration(body: unknown, env: Bindings, fetcher: typeof fetch) {
+	const job = parseGenerationJob(body);
+	const now = Date.now();
+	if (
+		job.groupId !== env.LINE_ALLOWED_GROUP_ID?.trim() ||
+		now - job.receivedAt > 10 * 60_000 ||
+		job.receivedAt > now + 60_000
+	)
+		return;
+	const gatewayId = env.AI_GATEWAY_ID?.trim();
+	const token = env.LINE_CHANNEL_ACCESS_TOKEN?.trim();
+	if (!env.AI || !gatewayId || !token || !env.DB)
+		throw new Error("Missing generation configuration");
+	if (!(await createGenerationClaims(env.DB).claim(job.eventId, now))) return;
+	if (env.CONVERSATIONS) {
+		if (job.memory || job.imageId) await conversation(env, job.groupId).answer(job);
+		return;
+	}
+	if (job.imageId) throw new Error("Missing conversations binding for image");
+	const respond = createRespondToMention(
+		createLineAnswerSender(token, job, fetcher, diagnostics),
+		job.groupId,
+		createGeminiTextGenerator(env.AI, gatewayId, diagnostics),
+		diagnostics,
+	);
+	await respond({ ...job, chatType: "group", mentioned: true });
+}
+
 export async function processGenerationBatch(
 	batch: MessageBatch<unknown>,
 	env: Bindings,
@@ -14,90 +77,8 @@ export async function processGenerationBatch(
 ) {
 	for (const message of batch.messages) {
 		try {
-			if (
-				typeof message.body === "object" &&
-				message.body !== null &&
-				"type" in message.body &&
-				message.body.type === "memory"
-			) {
-				const job = message.body as Record<string, unknown>;
-				if (
-					typeof job.groupId !== "string" ||
-					typeof job.token !== "string" ||
-					job.token.length > 100
-				) {
-					message.ack();
-					continue;
-				}
-				if (job.groupId === env.LINE_ALLOWED_GROUP_ID?.trim()) {
-					if (!env.CONVERSATIONS) throw new Error("Missing conversations binding");
-					await env.CONVERSATIONS.get(env.CONVERSATIONS.idFromName(job.groupId)).organize(
-						job.token,
-					);
-				}
-				message.ack();
-				continue;
-			}
-			if (
-				typeof message.body === "object" &&
-				message.body !== null &&
-				"type" in message.body &&
-				message.body.type === "reminder"
-			) {
-				const job = parseReminderJob(message.body);
-				if (job.groupId === env.LINE_ALLOWED_GROUP_ID?.trim()) {
-					if (!env.CONVERSATIONS) throw new Error("Missing conversations binding");
-					await env.CONVERSATIONS.get(env.CONVERSATIONS.idFromName(job.groupId)).deliver(job);
-				}
-				message.ack();
-				continue;
-			}
-			if (
-				typeof message.body === "object" &&
-				message.body !== null &&
-				"type" in message.body &&
-				message.body.type === "tasks"
-			) {
-				const group = "groupId" in message.body ? message.body.groupId : undefined;
-				if (typeof group === "string" && group === env.LINE_ALLOWED_GROUP_ID?.trim()) {
-					if (!env.CONVERSATIONS) throw new Error("Missing conversations binding");
-					await env.CONVERSATIONS.get(env.CONVERSATIONS.idFromName(group)).deliverTasks();
-				}
-				message.ack();
-				continue;
-			}
-			const job = parseGenerationJob(message.body);
-			const now = Date.now();
-			if (
-				job.groupId !== env.LINE_ALLOWED_GROUP_ID?.trim() ||
-				now - job.receivedAt > 10 * 60_000 ||
-				job.receivedAt > now + 60_000
-			) {
-				message.ack();
-				continue;
-			}
-			const gatewayId = env.AI_GATEWAY_ID?.trim();
-			const token = env.LINE_CHANNEL_ACCESS_TOKEN?.trim();
-			if (!env.AI || !gatewayId || !token || !env.DB)
-				throw new Error("Missing generation configuration");
-			if (!(await createGenerationClaims(env.DB).claim(job.eventId, now))) {
-				message.ack();
-				continue;
-			}
-			if (env.CONVERSATIONS) {
-				if (job.memory || job.imageId)
-					await env.CONVERSATIONS.get(env.CONVERSATIONS.idFromName(job.groupId)).answer(job);
-				message.ack();
-				continue;
-			}
-			if (job.imageId) throw new Error("Missing conversations binding for image");
-			const respond = createRespondToMention(
-				createLineAnswerSender(token, job, fetcher, diagnostics),
-				job.groupId,
-				createGeminiTextGenerator(env.AI, gatewayId, diagnostics),
-				diagnostics,
-			);
-			await respond({ ...job, chatType: "group", mentioned: true });
+			if (!(await processTypedJob(message.body, env)))
+				await processGeneration(message.body, env, fetcher);
 			message.ack();
 		} catch {
 			// Do not log the queued message or exception, both may contain personal data.

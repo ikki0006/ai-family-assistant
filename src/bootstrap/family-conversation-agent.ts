@@ -30,10 +30,13 @@ import { organizeMemory } from "../application/memory/organize-memory";
 import { analyzePhoto } from "../application/photos/analyze-photo";
 import type { GenerationJob } from "../application/ports/generation-queue";
 import type { Improvement } from "../application/ports/improvement-repository";
+import type { LongTermMemory } from "../application/ports/long-term-memory";
 import type { MemoryJob } from "../application/ports/long-term-memory";
 import type { QuickReply } from "../application/ports/quick-reply";
 import type { ReminderJob } from "../application/ports/reminder-repository";
+import type { ReplySender } from "../application/ports/reply-sender";
 import { AiUsageLimitError } from "../application/ports/text-generator";
+import { manageProfile, parseProfileCommand } from "../application/profiles/manage-profile";
 import { followupContextPrompt } from "../application/prompts/links";
 import { participationPrompt, reminderPlannerPrompt } from "../application/prompts/reminders";
 import { taskPlannerPrompt } from "../application/prompts/tasks";
@@ -66,6 +69,19 @@ import { reserveSearch } from "../infrastructure/search/search-quota";
 import { createTavilyPageReader } from "../infrastructure/search/tavily-page-reader";
 import { createTavilyWebSearch } from "../infrastructure/search/tavily-web-search";
 import type { Bindings } from "./create-app";
+
+interface OperationContext {
+	job: GenerationJob;
+	owner: string;
+	tasksReady: boolean;
+	listsReady: boolean;
+	taskVersion: number;
+	listVersion: number;
+	proactive: boolean;
+}
+type OperationOutcome =
+	| { text: string; choices: string[]; buttons: QuickReply[] | undefined }
+	| { skip: true };
 
 export class FamilyConversationAgent extends DurableObject<Bindings> {
 	readonly sessions = new Sessions();
@@ -240,38 +256,7 @@ export class FamilyConversationAgent extends DurableObject<Bindings> {
 		}
 		await this.locked(async () => {
 			const now = Date.now();
-			const replyToBot =
-				!!message.quotedMessageId &&
-				this.store.outgoing(message.quotedMessageId, now) !== undefined;
-			const followup =
-				!message.unsend &&
-				!message.mentioned &&
-				!message.quotedMessageId &&
-				!message.postback &&
-				!explicitReminderRequest(message.text) &&
-				message.speaker &&
-				message.text.length <= 2000
-					? this.questions.candidate(message.speaker, message.occurredAt ?? 0, now)
-					: undefined;
-			const bareLink = !message.unsend && !message.quotedMessageId && isBareUrl(message.text);
-			const candidate =
-				!followup &&
-				!bareLink &&
-				!message.unsend &&
-				!message.mentioned &&
-				!replyToBot &&
-				message.text.length <= 2000 &&
-				reminderCandidate(message.text);
-			const explicit = explicitReminderRequest(message.text);
-			const passive =
-				candidate && (explicit || now - this.store.participation().last_scan >= 60000);
-			if (passive) this.store.markScan(now);
-			const incoming = {
-				...message,
-				mentioned: message.mentioned || replyToBot || bareLink,
-				...(followup && !bareLink ? { followupId: followup.id } : {}),
-				...(passive ? { passive: true } : {}),
-			};
+			const incoming = this.prepareIncoming(message, now);
 			await this.ctx.storage.setAlarm(Date.now() + 3600000);
 			await this.flushMemoryDeletions(group);
 			const sender = createLineReplySender(
@@ -289,156 +274,8 @@ export class FamilyConversationAgent extends DurableObject<Bindings> {
 				diagnostics,
 				createGenerationQueue(this.env.JOBS_QUEUE),
 			);
-			if (
-				incoming.mentioned &&
-				!incoming.unsend &&
-				this.env.DB &&
-				incoming.eventId &&
-				incoming.occurredAt !== undefined
-			) {
-				const text = incoming.text.trim();
-				const profiles = createFamilyProfiles(this.env.DB);
-				const register = /^プロフィール登録[:：]\s*(.+)$/.exec(text);
-				const approve = /^プロフィール承認\s+(\d+)$/.exec(text);
-				if (
-					["プロフィール一覧", "プロフィール削除", "記憶・プロフィール全消去"].includes(text) ||
-					register ||
-					approve
-				) {
-					const rows = await profiles.list(group);
-					const own = rows.find((p) => p.speaker === incoming.speaker);
-					let response = "本人の発言者IDを確認できませんでした。";
-					if (text === "プロフィール一覧")
-						response =
-							rows
-								.map(
-									(p) =>
-										`${p.speaker === incoming.speaker ? "あなた" : (p.names[0] ?? "未確認のメンバー")}: ${p.names.join("・") || "未登録"}${p.pending.length ? `\n確認待ち: ${p.pending.join("・")}${p.speaker === incoming.speaker ? `\n本人が「プロフィール承認 ${p.version}」で確定できます。` : "（本人の確認待ち）"}` : ""}`,
-								)
-								.join("\n\n") || "プロフィールは未登録です。";
-					else if (text === "記憶・プロフィール全消去") {
-						this.store.requestProfileClear();
-						await this.store.reset(incoming.eventId, incoming.occurredAt, now);
-						await this.flushMemoryDeletions(group);
-						await profiles.clear(group);
-						response =
-							"会話・要約・長期記憶・家族プロフィールを削除しました。登録した通知・収集設定・共有リストとLINE上のメッセージは残ります。";
-					} else if (incoming.speaker && /^U[0-9a-f]{32}$/.test(incoming.speaker)) {
-						if (text === "プロフィール削除") {
-							for (const id of own?.sourceIds ?? []) await this.store.forget(id, now);
-							await this.flushMemoryDeletions(group);
-							await profiles.remove(group, incoming.speaker);
-							response = "あなたのプロフィールと根拠の発言・派生記憶を削除しました。";
-						} else if (approve)
-							response = (await profiles.confirm(group, incoming.speaker, Number(approve[1])))
-								? "あなたのプロフィールを確定しました。"
-								: "確認待ちの版が変わったか、候補がありません。プロフィール一覧で確認してください。";
-						else if (register && incoming.messageId) {
-							const names = register[1]?.split(/[、,]/).map((n) => n.trim()) ?? [];
-							if (!names.length || names.length > 3 || names.some((n) => !n || n.length > 20))
-								response =
-									"名前・呼び名を各20文字以内、最大3個まで読点で区切って指定してください。";
-							else {
-								await profiles.propose(group, {
-									speaker: incoming.speaker,
-									occurredAt: incoming.occurredAt,
-									names,
-									sourceIds: [incoming.messageId],
-								});
-								const updated = (await profiles.list(group)).find(
-									(p) => p.speaker === incoming.speaker,
-								);
-								if (
-									updated?.pending.length &&
-									JSON.stringify(updated.pending) === JSON.stringify(names)
-								)
-									await profiles.confirm(group, incoming.speaker, updated.version);
-								const saved = (await profiles.list(group)).find(
-									(p) => p.speaker === incoming.speaker,
-								);
-								response =
-									JSON.stringify(saved?.names) === JSON.stringify(names)
-										? `あなたの名前・呼び名を登録しました: ${names.join("・")}`
-										: "プロフィールの上限に達しました。不要な情報を削除してください。";
-							}
-						}
-					}
-					await sender.reply(incoming.replyToken, response);
-					return;
-				}
-			}
-			const command = incoming.mentioned && !incoming.unsend ? memoryCommand(incoming.text) : null;
-			if (
-				command &&
-				this.env.DB &&
-				incoming.eventId &&
-				incoming.messageId &&
-				incoming.occurredAt !== undefined
-			) {
-				const repo = createLongTermMemory(this.env.DB);
-				let response = "";
-				if (command.type === "list")
-					response = memoryInventory(await repo.list(group, now), command.page);
-				if (command.type === "schedules")
-					response = scheduleInventory(
-						await createReminderRepository(this.env.DB).list(group),
-						await createGarbageScheduleStore(this.env.DB).load(),
-						command.page,
-						now,
-					);
-				if (command.type === "clear") {
-					await this.store.reset(incoming.eventId, incoming.occurredAt, now);
-					await this.flushMemoryDeletions(group);
-					response =
-						"会話履歴・要約・長期記憶を削除しました。登録した通知・共有リスト・家族プロフィールは残っています。";
-				}
-				if (command.type === "forget") {
-					const fact = (await repo.list(group, now)).find((f) => f.id === command.id);
-					if (fact) {
-						for (const id of fact.sourceIds) await this.store.forget(id, now);
-						await this.flushMemoryDeletions(group);
-						response =
-							"記憶と根拠の発言、派生する要約・回答を削除しました。同じ発言を根拠にした他の記憶も削除されます。";
-					} else response = "その記憶は見つかりません。記憶一覧でIDを確認してください。";
-				}
-				if (command.type === "remember") {
-					if (command.text.length > 300) response = "覚える内容は300文字以内で指定してください。";
-					else if ((await repo.list(group, now)).length >= 200)
-						response = "長期記憶は200件までです。不要な記憶を削除してください。";
-					else {
-						const ref = await this.store.append(
-							{
-								id: incoming.messageId,
-								role: "user",
-								speaker: incoming.speaker ?? "unknown",
-								text: command.text,
-								occurredAt: incoming.occurredAt,
-								day: new Date(incoming.occurredAt + 9 * 3600000).toISOString().slice(0, 10),
-							},
-							incoming.eventId,
-							now,
-						);
-						if (!ref) return;
-						await repo.apply(
-							group,
-							[
-								{
-									subject: incoming.speaker ?? "unknown",
-									key: `explicit:${incoming.messageId}`,
-									text: command.text,
-									sourceIds: [incoming.messageId],
-									expiresAt: null,
-								},
-							],
-							[],
-							now,
-						);
-						response = `覚えました。\n${command.text}`;
-					}
-				}
-				await sender.reply(incoming.replyToken, response);
-				return;
-			}
+			if (await this.handleProfileCommand(incoming, group, now, sender)) return;
+			if (await this.handleMemoryCommand(incoming, group, now, sender)) return;
 			await receiveConversation(this.store, group, respond, sender)(incoming);
 			await this.flushMemoryDeletions(group);
 		});
@@ -684,135 +521,26 @@ export class FamilyConversationAgent extends DurableObject<Bindings> {
 			if (job.followupId && !this.questions.get(owner, job.followupId, Date.now())) return;
 			this.quickReplies.clearOwner(owner);
 			let proposalButtons: QuickReply[] | undefined;
-			if (operation?.action === "task") {
-				answer =
-					!tasksReady || !this.env.DB
-						? "タスク機能は準備中です。データベースの更新をお待ちください。"
-						: await manageTasks(
-								createFamilyTasks(this.env.DB),
-								job.groupId,
-								job.eventId,
-								operation.task ?? { op: "list" },
-								owner,
-								await createFamilyProfiles(this.env.DB).list(job.groupId),
-								Date.now(),
-								taskVersion,
-							);
+			const outcome = await this.applyOperation(
+				operation,
+				{ job, owner, tasksReady, listsReady, taskVersion, listVersion, proactive },
+				choices,
+			);
+			if (outcome && "skip" in outcome) return;
+			if (outcome) {
+				answer = outcome.text;
+				choices = outcome.choices;
+				proposalButtons = outcome.buttons;
 				generated = true;
-			} else if (operation?.action === "collection" && !listsReady) {
-				answer = "共有リストは準備中です。データベースの更新が完了してから、もう一度お願いします。";
-				generated = true;
-			} else if (operation?.action === "collection" && operation.collection && this.env.DB) {
-				const result = await manageLists(
-					createFamilyLists(this.env.DB),
-					job.groupId,
-					job.eventId,
-					operation.collection,
-					listVersion,
-				);
-				answer = result.text;
-				generated = true;
-				const confirmation = result.confirm;
-				if (confirmation)
-					proposalButtons = this.quickReplies.issue(
-						[true, false].map((approve) => ({
-							label: approve ? "リストを削除" : "キャンセル",
-							choice: { kind: "collection_delete" as const, ...confirmation, approve },
-						})),
-						snapshot.messages.at(-1)?.speaker ?? "unknown",
-						Date.now(),
-					);
-			} else if (operation?.action === "improve" && this.env.DB) {
-				answer = this.env.GH_IMPROVEMENT_TOKEN
-					? ((await handleImprovement(
-							{
-								text: `改善: ${operation.specification}`,
-								groupId: job.groupId,
-								eventId: job.eventId,
-							},
-							{
-								repository: createImprovementRepository(this.env.DB),
-								dispatcher: createImprovementDispatcher(this.env.GH_IMPROVEMENT_TOKEN),
-								onProposal: (request) => {
-									proposalButtons = this.improvementButtons(request);
-								},
-							},
-						)) ?? "")
-					: "自動改善の設定がまだ完了していません。";
-				generated = true;
-			} else if (operation && this.env.DB) {
-				choices = operation.action === "clarify" ? (operation.choices ?? []) : [];
-				if (
-					proactive &&
-					operation.action === "clarify" &&
-					Date.now() - this.store.participation().last_suggestion < 30 * 60000
-				)
-					return;
-				answer =
-					operation.action === "list"
-						? scheduleInventory(
-								await createReminderRepository(this.env.DB).list(job.groupId),
-								await createGarbageScheduleStore(this.env.DB).load(),
-								1,
-								Date.now(),
-							)
-						: ((await manageReminders(
-								createReminderRepository(this.env.DB),
-								job.groupId,
-								job.eventId,
-								operation,
-								Date.now(),
-							)) ?? "");
-				generated = true;
-				if (proactive && operation.action === "clarify") this.store.markSuggestion(Date.now());
 			}
 			if (!answer) return;
 			const text = Array.from(answer).slice(0, 2000).join("");
 			// Serialize the final check, delivery, and recording against deletion.
 			const speaker = snapshot.messages.at(-1)?.speaker;
-			const buttons =
-				choices.length && speaker && speaker !== "unknown"
-					? this.quickReplies.issue(
-							choices.map((label) => ({
-								label,
-								choice: {
-									kind: "conversation" as const,
-									text: label,
-									question: text.replace(/https?:\/\/[^\s]+/g, "").slice(0, 1000),
-								},
-							})),
-							speaker,
-							Date.now(),
-						)
-					: undefined;
+			const buttons = this.conversationButtons(choices, speaker, text);
 			await sender.reply(job.replyToken, text, proposalButtons ?? buttons);
-			this.questions.remove(owner);
-			if (
-				generated &&
-				!proposalButtons &&
-				owner !== "unknown" &&
-				(operation?.action === "clarify" ||
-					choices.length ||
-					/[？?]|教えて(?:ください|もらえ|ね)|選んでください/.test(
-						text.replace(/https?:\/\/[^\s]+/g, ""),
-					))
-			)
-				this.questions.set(owner, text, Date.now());
-			if (generated) {
-				const now = Date.now();
-				await this.store.append(
-					{
-						id: `answer:${job.eventId}`,
-						role: "assistant",
-						speaker: "assistant",
-						text,
-						occurredAt: now,
-						day: new Date(now + 9 * 3600000).toISOString().slice(0, 10),
-					},
-					`answer:${job.eventId}`,
-					now,
-				);
-			}
+			this.trackQuestion(owner, text, generated, proposalButtons, operation, choices);
+			await this.recordAnswer(job, text, generated);
 		});
 	}
 
@@ -988,6 +716,377 @@ export class FamilyConversationAgent extends DurableObject<Bindings> {
 				},
 			);
 		});
+	}
+
+	private async recordAnswer(job: GenerationJob, text: string, generated: boolean) {
+		if (generated) {
+			const now = Date.now();
+			await this.store.append(
+				{
+					id: `answer:${job.eventId}`,
+					role: "assistant",
+					speaker: "assistant",
+					text,
+					occurredAt: now,
+					day: new Date(now + 9 * 3600000).toISOString().slice(0, 10),
+				},
+				`answer:${job.eventId}`,
+				now,
+			);
+		}
+	}
+
+	private conversationButtons(choices: string[], speaker: string | undefined, text: string) {
+		return choices.length && speaker && speaker !== "unknown"
+			? this.quickReplies.issue(
+					choices.map((label) => ({
+						label,
+						choice: {
+							kind: "conversation" as const,
+							text: label,
+							question: text.replace(/https?:\/\/[^\s]+/g, "").slice(0, 1000),
+						},
+					})),
+					speaker,
+					Date.now(),
+				)
+			: undefined;
+	}
+
+	private trackQuestion(
+		owner: string,
+		text: string,
+		generated: boolean,
+		proposalButtons: QuickReply[] | undefined,
+		operation: ReminderAction | undefined,
+		choices: string[],
+	) {
+		this.questions.remove(owner);
+		if (
+			generated &&
+			!proposalButtons &&
+			owner !== "unknown" &&
+			(operation?.action === "clarify" ||
+				choices.length ||
+				/[？?]|教えて(?:ください|もらえ|ね)|選んでください/.test(
+					text.replace(/https?:\/\/[^\s]+/g, ""),
+				))
+		)
+			this.questions.set(owner, text, Date.now());
+	}
+
+	private async applyOperation(
+		operation: ReminderAction | undefined,
+		context: OperationContext,
+		choices: string[],
+	): Promise<OperationOutcome | null> {
+		if (!operation) return null;
+		if (operation.action === "task")
+			return { text: await this.applyTask(operation, context), choices, buttons: undefined };
+		if (operation.action === "collection" && !context.listsReady)
+			return {
+				text: "共有リストは準備中です。データベースの更新が完了してから、もう一度お願いします。",
+				choices,
+				buttons: undefined,
+			};
+		const db = this.env.DB;
+		if (!db) return null;
+		if (operation.action === "collection" && operation.collection)
+			return this.applyCollection(db, operation.collection, context, choices);
+		if (operation.action === "improve")
+			return this.proposeImprovement(db, operation, context.job, choices);
+		return this.applyReminder(db, operation, context);
+	}
+
+	private async applyTask(operation: ReminderAction, context: OperationContext): Promise<string> {
+		const { job, owner, tasksReady, taskVersion } = context;
+		if (!tasksReady || !this.env.DB)
+			return "タスク機能は準備中です。データベースの更新をお待ちください。";
+		return manageTasks(
+			createFamilyTasks(this.env.DB),
+			job.groupId,
+			job.eventId,
+			operation.task ?? { op: "list" },
+			owner,
+			await createFamilyProfiles(this.env.DB).list(job.groupId),
+			Date.now(),
+			taskVersion,
+		);
+	}
+
+	private async applyCollection(
+		db: D1Database,
+		collection: NonNullable<ReminderAction["collection"]>,
+		context: OperationContext,
+		choices: string[],
+	): Promise<OperationOutcome> {
+		const { job, owner, listVersion } = context;
+		const result = await manageLists(
+			createFamilyLists(db),
+			job.groupId,
+			job.eventId,
+			collection,
+			listVersion,
+		);
+		const confirmation = result.confirm;
+		const buttons = confirmation
+			? this.quickReplies.issue(
+					[true, false].map((approve) => ({
+						label: approve ? "リストを削除" : "キャンセル",
+						choice: { kind: "collection_delete" as const, ...confirmation, approve },
+					})),
+					owner,
+					Date.now(),
+				)
+			: undefined;
+		return { text: result.text, choices, buttons };
+	}
+
+	private async proposeImprovement(
+		db: D1Database,
+		operation: ReminderAction,
+		job: GenerationJob,
+		choices: string[],
+	): Promise<OperationOutcome> {
+		let buttons: QuickReply[] | undefined;
+		if (!this.env.GH_IMPROVEMENT_TOKEN)
+			return { text: "自動改善の設定がまだ完了していません。", choices, buttons };
+		const text =
+			(await handleImprovement(
+				{ text: `改善: ${operation.specification}`, groupId: job.groupId, eventId: job.eventId },
+				{
+					repository: createImprovementRepository(db),
+					dispatcher: createImprovementDispatcher(this.env.GH_IMPROVEMENT_TOKEN),
+					onProposal: (request) => {
+						buttons = this.improvementButtons(request);
+					},
+				},
+			)) ?? "";
+		return { text, choices, buttons };
+	}
+
+	private async applyReminder(
+		db: D1Database,
+		operation: ReminderAction,
+		context: OperationContext,
+	): Promise<OperationOutcome> {
+		const { job, proactive } = context;
+		const choices = operation.action === "clarify" ? (operation.choices ?? []) : [];
+		if (
+			proactive &&
+			operation.action === "clarify" &&
+			Date.now() - this.store.participation().last_suggestion < 30 * 60000
+		)
+			return { skip: true };
+		const text =
+			operation.action === "list"
+				? scheduleInventory(
+						await createReminderRepository(db).list(job.groupId),
+						await createGarbageScheduleStore(db).load(),
+						1,
+						Date.now(),
+					)
+				: ((await manageReminders(
+						createReminderRepository(db),
+						job.groupId,
+						job.eventId,
+						operation,
+						Date.now(),
+					)) ?? "");
+		if (proactive && operation.action === "clarify") this.store.markSuggestion(Date.now());
+		return { text, choices, buttons: undefined };
+	}
+
+	private followupCandidate(message: IncomingText, now: number) {
+		return !message.unsend &&
+			!message.mentioned &&
+			!message.quotedMessageId &&
+			!message.postback &&
+			!explicitReminderRequest(message.text) &&
+			message.speaker &&
+			message.text.length <= 2000
+			? this.questions.candidate(message.speaker, message.occurredAt ?? 0, now)
+			: undefined;
+	}
+
+	private prepareIncoming(message: IncomingText, now: number): IncomingText {
+		const replyToBot =
+			!!message.quotedMessageId && this.store.outgoing(message.quotedMessageId, now) !== undefined;
+		const followup = this.followupCandidate(message, now);
+		const bareLink = !message.unsend && !message.quotedMessageId && isBareUrl(message.text);
+		const candidate =
+			!followup &&
+			!bareLink &&
+			!message.unsend &&
+			!message.mentioned &&
+			!replyToBot &&
+			message.text.length <= 2000 &&
+			reminderCandidate(message.text);
+		const explicit = explicitReminderRequest(message.text);
+		const passive = candidate && (explicit || now - this.store.participation().last_scan >= 60000);
+		if (passive) this.store.markScan(now);
+		return {
+			...message,
+			mentioned: message.mentioned || replyToBot || bareLink,
+			...(followup && !bareLink ? { followupId: followup.id } : {}),
+			...(passive ? { passive: true } : {}),
+		};
+	}
+
+	private async rememberText(
+		incoming: IncomingText & { eventId: string; messageId: string; occurredAt: number },
+		text: string,
+		group: string,
+		now: number,
+		repo: LongTermMemory,
+	): Promise<string | null> {
+		if (text.length > 300) return "覚える内容は300文字以内で指定してください。";
+		if ((await repo.list(group, now)).length >= 200)
+			return "長期記憶は200件までです。不要な記憶を削除してください。";
+		const ref = await this.store.append(
+			{
+				id: incoming.messageId,
+				role: "user",
+				speaker: incoming.speaker ?? "unknown",
+				text,
+				occurredAt: incoming.occurredAt,
+				day: new Date(incoming.occurredAt + 9 * 3600000).toISOString().slice(0, 10),
+			},
+			incoming.eventId,
+			now,
+		);
+		if (!ref) return null;
+		await repo.apply(
+			group,
+			[
+				{
+					subject: incoming.speaker ?? "unknown",
+					key: `explicit:${incoming.messageId}`,
+					text,
+					sourceIds: [incoming.messageId],
+					expiresAt: null,
+				},
+			],
+			[],
+			now,
+		);
+		return `覚えました。\n${text}`;
+	}
+
+	private async forgetFact(
+		repo: LongTermMemory,
+		group: string,
+		id: string,
+		now: number,
+	): Promise<string> {
+		const fact = (await repo.list(group, now)).find((f) => f.id === id);
+		if (!fact) return "その記憶は見つかりません。記憶一覧でIDを確認してください。";
+		await this.forgetSources(group, fact.sourceIds, now);
+		return "記憶と根拠の発言、派生する要約・回答を削除しました。同じ発言を根拠にした他の記憶も削除されます。";
+	}
+
+	private async handleMemoryCommand(
+		incoming: IncomingText,
+		group: string,
+		now: number,
+		sender: ReplySender,
+	): Promise<boolean> {
+		if (
+			!incoming.mentioned ||
+			incoming.unsend ||
+			!this.env.DB ||
+			!incoming.eventId ||
+			!incoming.messageId ||
+			incoming.occurredAt === undefined
+		)
+			return false;
+		const command = memoryCommand(incoming.text);
+		if (!command) return false;
+		const repo = createLongTermMemory(this.env.DB);
+		let response: string | null;
+		switch (command.type) {
+			case "list":
+				response = memoryInventory(await repo.list(group, now), command.page);
+				break;
+			case "schedules":
+				response = scheduleInventory(
+					await createReminderRepository(this.env.DB).list(group),
+					await createGarbageScheduleStore(this.env.DB).load(),
+					command.page,
+					now,
+				);
+				break;
+			case "clear":
+				await this.store.reset(incoming.eventId, incoming.occurredAt, now);
+				await this.flushMemoryDeletions(group);
+				response =
+					"会話履歴・要約・長期記憶を削除しました。登録した通知・共有リスト・家族プロフィールは残っています。";
+				break;
+			case "forget":
+				response = await this.forgetFact(repo, group, command.id, now);
+				break;
+			case "remember":
+				response = await this.rememberText(
+					{
+						...incoming,
+						eventId: incoming.eventId,
+						messageId: incoming.messageId,
+						occurredAt: incoming.occurredAt,
+					},
+					command.text,
+					group,
+					now,
+					repo,
+				);
+				break;
+		}
+		if (response !== null) await sender.reply(incoming.replyToken, response);
+		return true;
+	}
+
+	private async forgetSources(group: string, ids: string[], now: number) {
+		for (const id of ids) await this.store.forget(id, now);
+		await this.flushMemoryDeletions(group);
+	}
+
+	private async handleProfileCommand(
+		incoming: IncomingText,
+		group: string,
+		now: number,
+		sender: ReplySender,
+	): Promise<boolean> {
+		if (
+			!incoming.mentioned ||
+			incoming.unsend ||
+			!this.env.DB ||
+			!incoming.eventId ||
+			incoming.occurredAt === undefined
+		)
+			return false;
+		const command = parseProfileCommand(incoming.text);
+		if (!command) return false;
+		const eventId = incoming.eventId;
+		const occurredAt = incoming.occurredAt;
+		const response = await manageProfile(
+			command,
+			{
+				group,
+				speaker: incoming.speaker,
+				messageId: incoming.messageId,
+				occurredAt,
+			},
+			createFamilyProfiles(this.env.DB),
+			{
+				clear: async () => {
+					this.store.requestProfileClear();
+					await this.store.reset(eventId, occurredAt, now);
+					await this.flushMemoryDeletions(group);
+				},
+				forget: (ids) => this.forgetSources(group, ids, now),
+			},
+		);
+		await sender.reply(incoming.replyToken, response);
+		return true;
 	}
 
 	private async consultOperation(

@@ -63,6 +63,20 @@ export function parseReminderAction(raw: string): ReminderAction {
 		].includes(String(o.action))
 	)
 		throw new Error("Invalid action");
+	validateReminderFields(o);
+	if (o.choices !== undefined && !validChoices(o.choices)) throw new Error("Invalid choices");
+	if (
+		o.action === "improve" &&
+		(typeof o.specification !== "string" ||
+			o.specification.trim().length < 5 ||
+			o.specification.length > 1500)
+	)
+		throw new Error("Invalid improvement specification");
+	if (o.action === "task") o.task = parseTaskAction(o.task);
+	if (o.action === "collection") o.collection = parseListAction(o.collection);
+	return o as ReminderAction;
+}
+function validateReminderFields(o: Record<string, unknown>) {
 	for (const key of ["question", "id", "title", "at"])
 		if (o[key] !== undefined && (typeof o[key] !== "string" || (o[key] as string).length > 500))
 			throw new Error("Invalid action field");
@@ -83,95 +97,89 @@ export function parseReminderAction(raw: string): ReminderAction {
 			(!Number.isInteger(o[field]) || Number(o[field]) < 1 || Number(o[field]) > max)
 		)
 			throw new Error("Invalid recurrence field");
-	if (o.choices !== undefined && !validChoices(o.choices)) throw new Error("Invalid choices");
-	if (
-		o.action === "improve" &&
-		(typeof o.specification !== "string" ||
-			o.specification.trim().length < 5 ||
-			o.specification.length > 1500)
-	)
-		throw new Error("Invalid improvement specification");
-	if (o.action === "task") o.task = parseTaskAction(o.task);
-	if (o.action === "collection") o.collection = parseListAction(o.collection);
-	return o as ReminderAction;
 }
+
 export function describeReminder(r: Reminder) {
 	return `${r.title}［${describeRecurrence(r)}・${r.status === "active" ? "有効" : r.status === "paused" ? "停止中" : "終了"}］\n次回: ${formatJst(r.next_at)}（日本時間）`;
 }
-export async function manageReminders(
+function previousReminderError(previous: Reminder | null, action: ReminderAction, event: string) {
+	if (!previous || previous.status === "deleted")
+		return "対象の通知が見つかりません。リマインド一覧で確認してください。";
+	if (previous.last_event === event) return `操作は反映済みです。\n${describeReminder(previous)}`;
+	if (previous.version !== action.version)
+		return "通知の状態が変わりました。一覧を確認してもう一度依頼してください。";
+	return null;
+}
+
+function actionSchedule(
+	action: ReminderAction,
+	previous: Reminder | null,
+	now: number,
+): { title: string; schedule: Schedule } | { error: string } {
+	if (!action.title?.trim() || action.title.length > 200 || !action.kind || !action.at)
+		return { error: "通知の内容と日時を確認させてください。" };
+	let schedule: Schedule;
+	try {
+		const inherited = previous?.kind === action.kind ? previous : null;
+		schedule = {
+			kind: action.kind,
+			at: parseJst(action.at),
+			interval: action.interval ?? inherited?.interval ?? 1,
+			day: action.day ?? inherited?.day ?? null,
+			month: action.month ?? inherited?.month ?? null,
+		};
+		validateSchedule(schedule);
+	} catch {
+		return {
+			error: "通知日時・繰り返し条件を確認させてください。周期、日付と時刻を指定してください。",
+		};
+	}
+	if (schedule.at <= now || schedule.at > now + 366 * 86400000 * (schedule.interval ?? 1))
+		return { error: "通知日時は未来を指定してください（初回は周期の間隔×1年以内）。" };
+	return { title: action.title.trim(), schedule };
+}
+
+async function saveSchedule(
 	repo: ReminderRepository,
 	group: string,
 	event: string,
 	action: ReminderAction,
+	previous: Reminder | null,
 	now: number,
-): Promise<string | null> {
-	if (
-		action.action === "none" ||
-		action.action === "inspect" ||
-		action.action === "improve" ||
-		action.action === "collection" ||
-		action.action === "task"
-	)
-		return null;
-	if (action.action === "clarify") return action.question || "通知の内容と日時を教えてください。";
-	if (action.action === "list") {
-		const rows = await repo.list(group);
-		return rows.length
-			? rows.map((r, i) => `${i + 1}. ${describeReminder(r)}`).join("\n\n")
-			: "登録されたリマインドはありません。";
-	}
-	let previous: Reminder | null = null;
-	if (action.action !== "create") {
-		previous = action.id ? await repo.get(group, action.id) : null;
-		if (!previous || previous.status === "deleted")
-			return "対象の通知が見つかりません。リマインド一覧で確認してください。";
-		if (previous.last_event === event) return `操作は反映済みです。\n${describeReminder(previous)}`;
-		if (previous.version !== action.version)
-			return "通知の状態が変わりました。一覧を確認してもう一度依頼してください。";
-	}
-	if (action.action === "create" || action.action === "update") {
-		if (!action.title?.trim() || action.title.length > 200 || !action.kind || !action.at)
-			return "通知の内容と日時を確認させてください。";
-		let at: number;
-		let schedule: Schedule;
-		try {
-			at = parseJst(action.at);
-			schedule = {
-				kind: action.kind,
-				at,
-				interval: action.interval ?? (previous?.kind === action.kind ? previous.interval : 1) ?? 1,
-				day: action.day ?? (previous?.kind === action.kind ? previous.day : null) ?? null,
-				month: action.month ?? (previous?.kind === action.kind ? previous.month : null) ?? null,
-			};
-			validateSchedule(schedule);
-		} catch {
-			return "通知日時・繰り返し条件を確認させてください。周期、日付と時刻を指定してください。";
-		}
-		if (at <= now || at > now + 366 * 86400000 * (schedule.interval ?? 1))
-			return "通知日時は未来を指定してください（初回は周期の間隔×1年以内）。";
-		if (action.action === "create") {
-			if ((await repo.list(group)).length >= 100)
-				return "通知は100件までです。不要な通知を削除してください。";
-			const r = await repo.create(group, event, action.title.trim(), schedule);
-			return `登録しました。\n${describeReminder(r)}\n通知は5分間隔で確認するため、通常0〜5分ほど遅れます。`;
-		}
-		if (previous) {
-			const next = {
-				...previous,
-				title: action.title.trim(),
-				kind: schedule.kind,
-				interval: schedule.interval ?? 1,
-				day: schedule.day ?? null,
-				month: schedule.month ?? null,
-				anchor_at: at,
-				next_at: at,
-			};
-			return (await repo.change(group, event, previous, next))
-				? `変更しました。\n${describeReminder(next)}`
-				: "状態が変わりました。もう一度依頼してください。";
-		}
+): Promise<string> {
+	const result = actionSchedule(action, previous, now);
+	if ("error" in result) return result.error;
+	const { title, schedule } = result;
+	if (action.action === "create") {
+		if ((await repo.list(group)).length >= 100)
+			return "通知は100件までです。不要な通知を削除してください。";
+		const reminder = await repo.create(group, event, title, schedule);
+		return `登録しました。\n${describeReminder(reminder)}\n通知は5分間隔で確認するため、通常0〜5分ほど遅れます。`;
 	}
 	if (!previous) return "対象の通知を指定してください。";
+	const next = {
+		...previous,
+		title,
+		kind: schedule.kind,
+		interval: schedule.interval ?? 1,
+		day: schedule.day ?? null,
+		month: schedule.month ?? null,
+		anchor_at: schedule.at,
+		next_at: schedule.at,
+	};
+	return (await repo.change(group, event, previous, next))
+		? `変更しました。\n${describeReminder(next)}`
+		: "状態が変わりました。もう一度依頼してください。";
+}
+
+async function changeStatus(
+	repo: ReminderRepository,
+	group: string,
+	event: string,
+	action: ReminderAction,
+	previous: Reminder,
+	now: number,
+): Promise<string> {
 	const next = { ...previous };
 	if (action.action === "pause") next.status = "paused";
 	if (action.action === "delete") {
@@ -190,4 +198,28 @@ export async function manageReminders(
 	return action.action === "delete"
 		? "通知を削除しました。"
 		: `${action.action === "pause" ? "停止" : "再開"}しました。\n${describeReminder(next)}`;
+}
+
+export async function manageReminders(
+	repo: ReminderRepository,
+	group: string,
+	event: string,
+	action: ReminderAction,
+	now: number,
+): Promise<string | null> {
+	if (["none", "inspect", "improve", "collection", "task"].includes(action.action)) return null;
+	if (action.action === "clarify") return action.question || "通知の内容と日時を教えてください。";
+	if (action.action === "list") {
+		const rows = await repo.list(group);
+		return rows.length
+			? rows.map((r, i) => `${i + 1}. ${describeReminder(r)}`).join("\n\n")
+			: "登録されたリマインドはありません。";
+	}
+	if (action.action === "create") return saveSchedule(repo, group, event, action, null, now);
+	const previous = action.id ? await repo.get(group, action.id) : null;
+	const error = previousReminderError(previous, action, event);
+	if (error) return error;
+	if (action.action === "update") return saveSchedule(repo, group, event, action, previous, now);
+	if (!previous) return "対象の通知を指定してください。";
+	return changeStatus(repo, group, event, action, previous, now);
 }

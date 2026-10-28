@@ -28,19 +28,38 @@ export function receiveConversation(
 			await respond(message);
 			return;
 		}
-		const memory = await store.append(
+		await recordAndRespond(
+			store,
 			{
-				id: message.messageId,
-				role: "user",
-				text: message.text,
-				speaker: message.speaker ?? "unknown",
+				...message,
+				eventId: message.eventId,
+				messageId: message.messageId,
 				occurredAt: message.occurredAt,
-				day: new Date(message.occurredAt + 9 * 3600000).toISOString().slice(0, 10),
 			},
-			message.eventId,
+			respond,
 			now(),
 		);
-		if (memory && (message.mentioned || message.passive || message.followupId))
-			await respond({ ...message, memory });
 	};
+}
+
+async function recordAndRespond(
+	store: ConversationStore,
+	message: IncomingText & { eventId: string; messageId: string; occurredAt: number },
+	respond: (message: IncomingText) => Promise<void>,
+	at: number,
+) {
+	const memory = await store.append(
+		{
+			id: message.messageId,
+			role: "user",
+			text: message.text,
+			speaker: message.speaker ?? "unknown",
+			occurredAt: message.occurredAt,
+			day: new Date(message.occurredAt + 9 * 3600000).toISOString().slice(0, 10),
+		},
+		message.eventId,
+		at,
+	);
+	if (memory && (message.mentioned || message.passive || message.followupId))
+		await respond({ ...message, memory });
 }

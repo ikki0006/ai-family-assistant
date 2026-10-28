@@ -43,22 +43,7 @@ export function createLongTermMemory(db: D1Database): LongTermMemory {
 				// Preserve provenance through corrections, so unsend removes derived facts too.
 				const sources = [...new Set([...(old?.sourceIds ?? []), ...update.sourceIds])];
 				if (sources.length > 200) continue;
-				statements.push(
-					db
-						.prepare(
-							"INSERT INTO long_term_memories VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(group_id,subject,fact_key) DO UPDATE SET text=excluded.text,source_ids=excluded.source_ids,expires_at=excluded.expires_at,updated_at=excluded.updated_at",
-						)
-						.bind(
-							old?.id ?? crypto.randomUUID(),
-							group,
-							update.subject,
-							update.key,
-							update.text,
-							JSON.stringify(sources),
-							update.expiresAt,
-							now,
-						),
-				);
+				statements.push(memoryUpsert(db, group, update, old, sources, now));
 			}
 			if (statements.length) await db.batch(statements);
 		},
@@ -83,4 +68,28 @@ export function createLongTermMemory(db: D1Database): LongTermMemory {
 			await db.prepare("DELETE FROM long_term_memories WHERE group_id=?").bind(group).run();
 		},
 	};
+}
+
+function memoryUpsert(
+	db: D1Database,
+	group: string,
+	update: Parameters<LongTermMemory["apply"]>[1][number],
+	old: MemoryFact | undefined,
+	sources: string[],
+	now: number,
+): D1PreparedStatement {
+	return db
+		.prepare(
+			"INSERT INTO long_term_memories VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(group_id,subject,fact_key) DO UPDATE SET text=excluded.text,source_ids=excluded.source_ids,expires_at=excluded.expires_at,updated_at=excluded.updated_at",
+		)
+		.bind(
+			old?.id ?? crypto.randomUUID(),
+			group,
+			update.subject,
+			update.key,
+			update.text,
+			JSON.stringify(sources),
+			update.expiresAt,
+			now,
+		);
 }

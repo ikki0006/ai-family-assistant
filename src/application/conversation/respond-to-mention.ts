@@ -34,13 +34,7 @@ export function createRespondToMention(
 	now: () => number = Date.now,
 ) {
 	return async (message: IncomingText): Promise<void> => {
-		if (
-			!allowedGroupId ||
-			message.chatType !== "group" ||
-			message.groupId !== allowedGroupId ||
-			(!message.mentioned && !message.passive && !message.followupId)
-		)
-			return;
+		if (!canRespond(message, allowedGroupId)) return;
 		const text = message.text.trim();
 		if (!text) return;
 		if (text.toLowerCase() === "ping") {
@@ -58,46 +52,77 @@ export function createRespondToMention(
 			return;
 		}
 		if (jobs) {
-			if (!message.eventId) {
-				diagnostics?.failure("invalid_payload");
-				return;
-			}
-			await jobs.enqueue({
-				eventId: message.eventId,
-				...(message.passive ? { passive: true } : {}),
-				...(message.followupId ? { followupId: message.followupId } : {}),
-				...(message.quotedMessageId ? { quotedMessageId: message.quotedMessageId } : {}),
-				groupId: allowedGroupId,
-				text: message.memory ? "" : text,
-				...(message.memory ? { memory: message.memory } : {}),
-				replyToken: message.replyToken,
-				receivedAt: now(),
-			});
+			await enqueueGeneration(jobs, message, allowedGroupId, text, now(), diagnostics);
 			return;
 		}
-		let answer: string;
-		try {
-			answer = (
-				await generator.generate({
-					system: secretaryPrompt(now(), false),
-					messages: [{ role: "user", content: text }],
-				})
-			).trim();
-			if (!answer) throw new Error("Empty model response");
-		} catch (error) {
-			await sender.reply(
-				message.replyToken,
-				error instanceof AiUsageLimitError
-					? "AIの残高不足、または予算・利用回数の上限により、今は回答できません。"
-					: "今は回答を作れませんでした。少し待ってから、もう一度話しかけてください。",
-			);
-			return;
-		}
-		const characters = Array.from(answer);
-		const reply =
-			characters.length > 2000
-				? `${characters.slice(0, 2000).join("")}\n（長いため、ここまで表示しています）`
-				: answer;
-		await sender.reply(message.replyToken, reply);
+		await respondImmediately(sender, generator, message.replyToken, text, now);
 	};
+}
+
+async function enqueueGeneration(
+	jobs: GenerationQueue,
+	message: IncomingText,
+	allowedGroupId: string,
+	text: string,
+	at: number,
+	diagnostics: Diagnostics | undefined,
+) {
+	if (!message.eventId) {
+		diagnostics?.failure("invalid_payload");
+		return;
+	}
+	await jobs.enqueue({
+		eventId: message.eventId,
+		...(message.passive ? { passive: true } : {}),
+		...(message.followupId ? { followupId: message.followupId } : {}),
+		...(message.quotedMessageId ? { quotedMessageId: message.quotedMessageId } : {}),
+		groupId: allowedGroupId,
+		text: message.memory ? "" : text,
+		...(message.memory ? { memory: message.memory } : {}),
+		replyToken: message.replyToken,
+		receivedAt: at,
+	});
+	return;
+}
+
+async function respondImmediately(
+	sender: ReplySender,
+	generator: TextGenerator,
+	replyToken: string,
+	text: string,
+	now: () => number,
+) {
+	let answer: string;
+	try {
+		answer = (
+			await generator.generate({
+				system: secretaryPrompt(now(), false),
+				messages: [{ role: "user", content: text }],
+			})
+		).trim();
+		if (!answer) throw new Error("Empty model response");
+	} catch (error) {
+		await sender.reply(
+			replyToken,
+			error instanceof AiUsageLimitError
+				? "AIの残高不足、または予算・利用回数の上限により、今は回答できません。"
+				: "今は回答を作れませんでした。少し待ってから、もう一度話しかけてください。",
+		);
+		return;
+	}
+	const characters = Array.from(answer);
+	const reply =
+		characters.length > 2000
+			? `${characters.slice(0, 2000).join("")}\n（長いため、ここまで表示しています）`
+			: answer;
+	await sender.reply(replyToken, reply);
+}
+
+function canRespond(message: IncomingText, allowedGroupId: string): boolean {
+	return (
+		Boolean(allowedGroupId) &&
+		message.chatType === "group" &&
+		message.groupId === allowedGroupId &&
+		Boolean(message.mentioned || message.passive || message.followupId)
+	);
 }

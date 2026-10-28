@@ -43,6 +43,12 @@ export function validateSchedule(schedule: Schedule): void {
 		throw new Error("Invalid recurrence month");
 	if (kind === "yearly" && day != null && month != null && day > daysInMonth(2000, month))
 		throw new Error("Impossible annual date");
+	validateAnchor(schedule);
+}
+
+function validateAnchor(schedule: Schedule): void {
+	const { kind, day, month } = schedule;
+	const calendar = kind === "monthly" || kind === "yearly";
 	const date = new Date(schedule.at + JST);
 	if (!Number.isFinite(schedule.at)) throw new Error("Invalid anchor");
 	if (
@@ -53,6 +59,7 @@ export function validateSchedule(schedule: Schedule): void {
 	)
 		throw new Error("Anchor disagrees with recurrence");
 }
+
 export function nextOccurrence(schedule: Schedule, after: number): number | null {
 	validateSchedule(schedule);
 	if (schedule.at > after) return schedule.at;

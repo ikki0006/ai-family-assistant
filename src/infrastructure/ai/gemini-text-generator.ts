@@ -71,22 +71,7 @@ export function createGeminiTextGenerator(
 						},
 					},
 				);
-				if (!response.ok) {
-					diagnostics?.failure(
-						[402, 429].includes(response.status) ? "llm_rate_or_budget_limited" : "llm_api_failed",
-						response.status,
-					);
-					if ([402, 429].includes(response.status)) throw new AiUsageLimitError();
-					throw new Error("AI request rejected");
-				}
-				const answer = completion
-					.parse(await response.json())
-					.candidates[0]?.content.parts.filter((part) => !part.thought)
-					.map((part) => part.text ?? "")
-					.join("")
-					.trim();
-				if (!answer) throw new Error("Empty AI response");
-				return answer;
+				return await readCompletion(response, diagnostics);
 			} catch (error) {
 				if (error instanceof AiUsageLimitError) throw error;
 				diagnostics?.failure(signal.aborted ? "llm_timeout" : "llm_generation_failed");
@@ -95,4 +80,26 @@ export function createGeminiTextGenerator(
 			}
 		},
 	};
+}
+
+async function readCompletion(
+	response: Response,
+	diagnostics: Diagnostics | undefined,
+): Promise<string> {
+	if (!response.ok) {
+		diagnostics?.failure(
+			[402, 429].includes(response.status) ? "llm_rate_or_budget_limited" : "llm_api_failed",
+			response.status,
+		);
+		if ([402, 429].includes(response.status)) throw new AiUsageLimitError();
+		throw new Error("AI request rejected");
+	}
+	const answer = completion
+		.parse(await response.json())
+		.candidates[0]?.content.parts.filter((part) => !part.thought)
+		.map((part) => part.text ?? "")
+		.join("")
+		.trim();
+	if (!answer) throw new Error("Empty AI response");
+	return answer;
 }

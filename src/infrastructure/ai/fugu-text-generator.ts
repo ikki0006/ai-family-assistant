@@ -34,22 +34,26 @@ export function createFuguTextGenerator(
 				}
 				return answer;
 			} catch (error) {
-				if (
-					error instanceof OpenAI.APIConnectionTimeoutError ||
-					error instanceof OpenAI.APIUserAbortError
-				) {
-					diagnostics?.failure("llm_timeout");
-				} else if (error instanceof OpenAI.APIError) {
-					diagnostics?.failure(
-						error.status === 401 || error.status === 403 ? "llm_auth_failed" : "llm_api_failed",
-						error.status,
-					);
-				} else {
-					diagnostics?.failure("llm_generation_failed");
-				}
+				reportFailure(error, diagnostics);
 				// SDK errors may contain requests, provider bodies, or credentials.
 				throw new Error("Fugu generation failed");
 			}
 		},
 	};
+}
+
+function reportFailure(error: unknown, diagnostics: Diagnostics | undefined) {
+	if (
+		error instanceof OpenAI.APIConnectionTimeoutError ||
+		error instanceof OpenAI.APIUserAbortError
+	) {
+		diagnostics?.failure("llm_timeout");
+	} else if (error instanceof OpenAI.APIError) {
+		diagnostics?.failure(
+			error.status === 401 || error.status === 403 ? "llm_auth_failed" : "llm_api_failed",
+			error.status,
+		);
+	} else {
+		diagnostics?.failure("llm_generation_failed");
+	}
 }

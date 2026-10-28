@@ -43,18 +43,7 @@ export function scheduleInventory(
 			(r) =>
 				`・${r.title}（${describeRecurrence(r)}・${status[r.status]}）\n${r.status === "done" ? "最終予定" : "次回予定"}: ${formatJst(r.next_at)}`,
 		);
-	if (garbage) {
-		const today = new Date(now + 9 * 3600000).toISOString().slice(0, 10);
-		entries.push(
-			`・ゴミ出し通知：前日23時／当日8時（日本時間）\n収集設定の期間: ${garbage.validFrom}〜${garbage.validThrough}${today > garbage.validThrough ? "（期限切れ）" : today < garbage.validFrom ? "（開始前）" : ""}`,
-		);
-		for (const rule of garbage.rules)
-			entries.push(
-				`・${rule.label}: ${rule.weeks?.length ? `第${rule.weeks.join("・")}` : "毎週"}${"日月火水木金土"[rule.weekday]}曜日`,
-			);
-		for (const [date, labels] of Object.entries(garbage.overrides).sort())
-			if (date >= today) entries.push(`・${date}の収集例外: ${labels.join("、") || "収集なし"}`);
-	}
+	if (garbage) entries.push(...garbageInventory(garbage, now));
 	return `登録スケジュール（日本時間・${page}/${Math.max(1, Math.ceil(entries.length / 4))}ページ）\n\n${entries.slice((page - 1) * 4, page * 4).join("\n\n") || "このページに予定はありません。"}\n\n「予定一覧 2」で次のページを確認できます。停止中の通知は送信されません。`;
 }
 export function relevantMemories(facts: MemoryFact[], text: string): MemoryFact[] {
@@ -65,4 +54,20 @@ export function relevantMemories(facts: MemoryFact[], text: string): MemoryFact[
 		.sort((a, b) => b.score - a.score || b.f.updatedAt - a.f.updatedAt)
 		.slice(0, 8)
 		.map((v) => v.f);
+}
+
+function garbageInventory(garbage: GarbageSchedule, now: number): string[] {
+	const entries: string[] = [];
+	const today = new Date(now + 9 * 3600000).toISOString().slice(0, 10);
+	entries.push(
+		`・ゴミ出し通知：前日23時／当日8時（日本時間）\n収集設定の期間: ${garbage.validFrom}〜${garbage.validThrough}${today > garbage.validThrough ? "（期限切れ）" : today < garbage.validFrom ? "（開始前）" : ""}`,
+	);
+	for (const rule of garbage.rules)
+		entries.push(
+			`・${rule.label}: ${rule.weeks?.length ? `第${rule.weeks.join("・")}` : "毎週"}${"日月火水木金土"[rule.weekday]}曜日`,
+		);
+	for (const [date, labels] of Object.entries(garbage.overrides).sort())
+		if (date >= today) entries.push(`・${date}の収集例外: ${labels.join("、") || "収集なし"}`);
+
+	return entries;
 }

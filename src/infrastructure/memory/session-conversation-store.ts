@@ -116,6 +116,29 @@ export class SessionConversationStore implements ConversationStore {
 			.toArray();
 		const day = rows[0]?.day;
 		if (!day) return null;
+		const selected = await this.selectMemoryMessages(rows, day);
+		if (!selected.length) return null;
+		// LIMIT must not hide additional messages with the last timestamp.
+		const through = selected.at(-1)?.occurredAt ?? 0;
+		const atCount = this.sql
+			.exec<{ n: number }>(
+				"SELECT COUNT(*) AS n FROM family_messages WHERE at=? AND id NOT IN (SELECT id FROM memory_processed)",
+				through,
+			)
+			.one().n;
+		if (atCount > selected.filter((m) => m.occurredAt === through).length)
+			while (selected.at(-1)?.occurredAt === through) selected.pop();
+		if (!selected.length) return null;
+		const previous =
+			this.sql
+				.exec<{ text: string }>("SELECT text FROM family_summaries WHERE day=?", day)
+				.toArray()[0]?.text ?? "";
+		return { messages: selected, previousSummary: previous, day, ...this.meta() };
+	}
+	private async selectMemoryMessages(
+		rows: IndexRow[],
+		day: string,
+	): Promise<ConversationMessage[]> {
 		const selected: ConversationMessage[] = [];
 		let size = 0;
 		for (const row of rows) {
@@ -141,24 +164,10 @@ export class SessionConversationStore implements ConversationStore {
 				speaker: (stored.metadata as { speaker?: string } | undefined)?.speaker ?? "unknown",
 			});
 		}
-		if (!selected.length) return null;
-		// LIMIT must not hide additional messages with the last timestamp.
-		const through = selected.at(-1)?.occurredAt ?? 0;
-		const atCount = this.sql
-			.exec<{ n: number }>(
-				"SELECT COUNT(*) AS n FROM family_messages WHERE at=? AND id NOT IN (SELECT id FROM memory_processed)",
-				through,
-			)
-			.one().n;
-		if (atCount > selected.filter((m) => m.occurredAt === through).length)
-			while (selected.at(-1)?.occurredAt === through) selected.pop();
-		if (!selected.length) return null;
-		const previous =
-			this.sql
-				.exec<{ text: string }>("SELECT text FROM family_summaries WHERE day=?", day)
-				.toArray()[0]?.text ?? "";
-		return { messages: selected, previousSummary: previous, day, ...this.meta() };
+
+		return selected;
 	}
+
 	async completeMemory(batch: MemoryBatch, summary: string) {
 		await this.saveSummary(
 			batch.day,

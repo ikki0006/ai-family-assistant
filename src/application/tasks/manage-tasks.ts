@@ -47,12 +47,7 @@ export function parseTaskAction(value: unknown): TaskAction {
 		!["once", "daily", "weekly", "monthly", "yearly"].includes(String(v.kind))
 	)
 		throw new Error("Invalid task recurrence");
-	for (const key of ["interval", "day", "month"])
-		if (
-			v[key] !== undefined &&
-			(!Number.isInteger(v[key]) || Number(v[key]) < 1 || Number(v[key]) > 100)
-		)
-			throw new Error("Invalid task recurrence field");
+	validateRecurrenceFields(v);
 	return v as TaskAction;
 }
 export function taskInventory(state: TaskState, now: number): string {
@@ -94,70 +89,11 @@ export async function manageTasks(
 		(await repo.save(group, event, state, tasks))
 			? text
 			: "タスクが更新されました。もう一度お願いします。";
-	if (action.op === "create") {
-		if (!action.title?.trim() || !action.at || !action.kind || !action.assignees?.length)
-			return "タスクの内容・担当者・初回の日時と通知時刻を教えてください。";
-		if (tasks.length >= 20) return "タスクは20件までです。不要なものを削除してください。";
-		const members = [...new Set(action.assignees)].map((speaker) => ({
-			speaker,
-			name:
-				profiles.find((p) => p.speaker === speaker)?.names[0] ??
-				(speaker === actor ? "依頼した本人" : ""),
-		}));
-		if (members.some((m) => !m.name))
-			return "担当者の名前とLINEの発言者をまだ対応づけられません。本人のプロフィールを確認してから登録してください。";
-		let schedule: Schedule;
-		try {
-			schedule = {
-				kind: action.kind,
-				at: parseJst(action.at),
-				interval: action.interval ?? 1,
-				day: action.day ?? null,
-				month: action.month ?? null,
-			};
-			validateSchedule(schedule);
-			if (schedule.at <= now || !Number.isFinite(schedule.at)) throw new Error();
-		} catch {
-			return "未来の初回日時と、対応する周期・通知時刻を教えてください。";
-		}
-		const task: FamilyTask = {
-			id: `task:${event}`,
-			title: action.title.trim(),
-			schedule,
-			members,
-			status: "active",
-			nextAt: nextOccurrence(schedule, schedule.at),
-			occurrences: [],
-			notifiedDay: null,
-		};
-		addOccurrence(task, schedule.at);
-		tasks.push(task);
-		return save(
-			`「${task.title}」を登録しました。\n担当: ${members.map((m) => m.name).join("・")}\n初回: ${formatJst(schedule.at)}\n各自が完了するまで、未完了の人の分を毎日同じ時刻に家族グループへ通知します。`,
-		);
-	}
+	if (action.op === "create") return createTask(tasks, action, actor, profiles, now, event, save);
 	const task = tasks.find((t) => t.id === action.id);
 	if (!task)
 		return "どのタスクか教えてください。対象が複数ある場合は名前と期限を指定してください。";
-	if (action.op === "complete") {
-		const candidates = task.occurrences.filter(
-			(o) =>
-				o.doneAt === null &&
-				o.speaker === actor &&
-				(!action.occurrenceId || o.id === action.occurrenceId),
-		);
-		if (candidates.length !== 1)
-			return "あなたの未完了分を一つに特定できませんでした。どの期限のタスクを終えたか教えてください。";
-		const occurrence = candidates[0];
-		if (!occurrence) return "この分は完了済みか、あなたの担当ではありません。";
-		occurrence.doneAt = now;
-		const others = task.occurrences.filter(
-			(o) => o.dueAt === occurrence.dueAt && o.doneAt === null,
-		);
-		return save(
-			`「${task.title}」の${formatJst(occurrence.dueAt)}分、あなたの完了を記録しました。${others.length ? `\n残り: ${others.map((o) => task.members.find((m) => m.speaker === o.speaker)?.name ?? "担当者").join("・")}` : "\nこの回は全員完了です。"}`,
-		);
-	}
+	if (action.op === "complete") return completeTask(task, action, actor, now, save);
 	if (action.op === "delete") {
 		tasks.splice(tasks.indexOf(task), 1);
 		return save(`「${task.title}」を削除しました。今後の通知も止めました。`);
@@ -166,5 +102,89 @@ export async function manageTasks(
 	if (action.op === "resume") advanceTask(task, now);
 	return save(
 		`「${task.title}」の通知を${action.op === "pause" ? "停止" : "再開"}しました。未完了分は保持しています。`,
+	);
+}
+
+function validateRecurrenceFields(v: Record<string, unknown>) {
+	for (const key of ["interval", "day", "month"])
+		if (
+			v[key] !== undefined &&
+			(!Number.isInteger(v[key]) || Number(v[key]) < 1 || Number(v[key]) > 100)
+		)
+			throw new Error("Invalid task recurrence field");
+}
+
+async function createTask(
+	tasks: FamilyTask[],
+	action: TaskAction,
+	actor: string,
+	profiles: FamilyProfile[],
+	now: number,
+	event: string,
+	save: (text: string) => Promise<string>,
+): Promise<string> {
+	if (!action.title?.trim() || !action.at || !action.kind || !action.assignees?.length)
+		return "タスクの内容・担当者・初回の日時と通知時刻を教えてください。";
+	if (tasks.length >= 20) return "タスクは20件までです。不要なものを削除してください。";
+	const members = [...new Set(action.assignees)].map((speaker) => ({
+		speaker,
+		name:
+			profiles.find((p) => p.speaker === speaker)?.names[0] ??
+			(speaker === actor ? "依頼した本人" : ""),
+	}));
+	if (members.some((m) => !m.name))
+		return "担当者の名前とLINEの発言者をまだ対応づけられません。本人のプロフィールを確認してから登録してください。";
+	let schedule: Schedule;
+	try {
+		schedule = {
+			kind: action.kind,
+			at: parseJst(action.at),
+			interval: action.interval ?? 1,
+			day: action.day ?? null,
+			month: action.month ?? null,
+		};
+		validateSchedule(schedule);
+		if (schedule.at <= now || !Number.isFinite(schedule.at)) throw new Error();
+	} catch {
+		return "未来の初回日時と、対応する周期・通知時刻を教えてください。";
+	}
+	const task: FamilyTask = {
+		id: `task:${event}`,
+		title: action.title.trim(),
+		schedule,
+		members,
+		status: "active",
+		nextAt: nextOccurrence(schedule, schedule.at),
+		occurrences: [],
+		notifiedDay: null,
+	};
+	addOccurrence(task, schedule.at);
+	tasks.push(task);
+	return save(
+		`「${task.title}」を登録しました。\n担当: ${members.map((m) => m.name).join("・")}\n初回: ${formatJst(schedule.at)}\n各自が完了するまで、未完了の人の分を毎日同じ時刻に家族グループへ通知します。`,
+	);
+}
+
+async function completeTask(
+	task: FamilyTask,
+	action: TaskAction,
+	actor: string,
+	now: number,
+	save: (text: string) => Promise<string>,
+): Promise<string> {
+	const candidates = task.occurrences.filter(
+		(o) =>
+			o.doneAt === null &&
+			o.speaker === actor &&
+			(!action.occurrenceId || o.id === action.occurrenceId),
+	);
+	if (candidates.length !== 1)
+		return "あなたの未完了分を一つに特定できませんでした。どの期限のタスクを終えたか教えてください。";
+	const occurrence = candidates[0];
+	if (!occurrence) return "この分は完了済みか、あなたの担当ではありません。";
+	occurrence.doneAt = now;
+	const others = task.occurrences.filter((o) => o.dueAt === occurrence.dueAt && o.doneAt === null);
+	return save(
+		`「${task.title}」の${formatJst(occurrence.dueAt)}分、あなたの完了を記録しました。${others.length ? `\n残り: ${others.map((o) => task.members.find((m) => m.speaker === o.speaker)?.name ?? "担当者").join("・")}` : "\nこの回は全員完了です。"}`,
 	);
 }

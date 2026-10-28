@@ -92,18 +92,7 @@ export function materializeFiles(value, sources) {
 		const source = sources.find((s) => s.startsWith(`${file.path}\n`));
 		if (!source) throw new Error("Improvement tried to modify a source that was not provided");
 		let content = source.slice(file.path.length + 1);
-		if (file.edits !== undefined) {
-			if (!Array.isArray(file.edits) || !file.edits.length || file.edits.length > 20)
-				throw new Error("Invalid improvement edits");
-			for (const edit of file.edits) {
-				if (!edit || typeof edit.old !== "string" || !edit.old || typeof edit.new !== "string")
-					throw new Error("Invalid improvement replacement");
-				const at = content.indexOf(edit.old);
-				if (at < 0 || content.indexOf(edit.old, at + 1) >= 0)
-					throw new Error("Improvement replacement must match exactly once");
-				content = content.slice(0, at) + edit.new + content.slice(at + edit.old.length);
-			}
-		} else content = file.content;
+		content = file.edits !== undefined ? applyEdits(content, file.edits) : file.content;
 		return { ...file, content };
 	});
 	try {
@@ -111,4 +100,19 @@ export function materializeFiles(value, sources) {
 	} catch {
 		throw new Error("Improvement files violate path, count or size limits");
 	}
+}
+
+function applyEdits(original, edits) {
+	let content = original;
+	if (!Array.isArray(edits) || !edits.length || edits.length > 20)
+		throw new Error("Invalid improvement edits");
+	for (const edit of edits) {
+		if (!edit || typeof edit.old !== "string" || !edit.old || typeof edit.new !== "string")
+			throw new Error("Invalid improvement replacement");
+		const at = content.indexOf(edit.old);
+		if (at < 0 || content.indexOf(edit.old, at + 1) >= 0)
+			throw new Error("Improvement replacement must match exactly once");
+		content = content.slice(0, at) + edit.new + content.slice(at + edit.old.length);
+	}
+	return content;
 }

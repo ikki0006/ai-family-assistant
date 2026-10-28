@@ -42,125 +42,144 @@ export function parseWebhook(body: string): IncomingText[] | null {
 	}
 	const envelope = envelopeSchema.safeParse(parsed);
 	if (!envelope.success) return null;
-	return envelope.data.events.flatMap<IncomingText>((event) => {
-		const postback = z
-			.object({
-				type: z.literal("postback"),
-				mode: z.enum(["active", "standby"]).optional(),
-				webhookEventId: z.string().min(1).max(128),
-				timestamp: z.number().int().nonnegative(),
-				replyToken: z.string().min(1),
-				source: z.object({
-					type: z.literal("group"),
-					groupId: z.string().min(1),
-					userId: z.string().optional(),
-				}),
-				postback: z.object({ data: z.string().max(300) }),
-			})
-			.safeParse(event);
-		if (postback.success) {
-			const v = postback.data;
-			if (v.mode === "standby" || !/^qr:[a-f0-9-]{36}$/.test(v.postback.data)) return [];
-			return [
-				{
-					eventId: v.webhookEventId,
-					messageId: `postback:${v.webhookEventId}`,
-					occurredAt: v.timestamp,
-					chatType: "group",
-					groupId: v.source.groupId,
-					...(v.source.userId ? { speaker: v.source.userId } : {}),
-					mentioned: false,
-					text: "",
-					replyToken: v.replyToken,
-					postback: v.postback.data,
-				},
-			];
-		}
-		const unsend = z
-			.object({
-				type: z.literal("unsend"),
-				webhookEventId: z.string(),
-				timestamp: z.number(),
-				source: z.object({ type: z.literal("group"), groupId: z.string() }),
-				unsend: z.object({ messageId: z.string() }),
-			})
-			.safeParse(event);
-		if (unsend.success)
-			return [
-				{
-					eventId: unsend.data.webhookEventId,
-					messageId: unsend.data.unsend.messageId,
-					occurredAt: unsend.data.timestamp,
-					chatType: "group" as const,
-					groupId: unsend.data.source.groupId,
-					mentioned: false,
-					text: "",
-					replyToken: "",
-					unsend: true,
-				},
-			];
-		const photo = z
-			.object({
-				replyToken: z.string().min(1),
-				type: z.literal("message"),
-				mode: z.enum(["active", "standby"]).optional(),
-				webhookEventId: z.string().min(1).max(128),
-				timestamp: z.number().int().nonnegative(),
-				source: z.object({ type: z.literal("group"), groupId: z.string().min(1) }),
-				message: z.object({
-					type: z.literal("image"),
-					id: z.string().regex(/^[0-9]{1,64}$/),
-					contentProvider: z.object({ type: z.literal("line") }),
-				}),
-			})
-			.safeParse(event);
-		if (photo.success) {
-			const v = photo.data;
-			if (v.mode === "standby") return [];
-			return [
-				{
-					eventId: v.webhookEventId,
-					messageId: v.message.id,
-					occurredAt: v.timestamp,
-					chatType: "group",
-					groupId: v.source.groupId,
-					mentioned: false,
-					text: "",
-					replyToken: v.replyToken,
-					image: true,
-				},
-			];
-		}
-		const result = textEventSchema.safeParse(event);
-		// Non-text, future event types, and standby events require no reply.
-		if (!result.success || result.data.mode === "standby") return [];
-		const value = result.data;
-		const mentions = (value.message.mention?.mentionees ?? [])
-			.filter((mention) => mention.type === "user" && mention.isSelf === true)
-			.sort((left, right) => right.index - left.index);
-		let text = value.message.text;
-		let boundary = text.length;
-		for (const mention of mentions) {
-			if (mention.index + mention.length > boundary) return [];
-			// LINE offsets and JS string indices both count UTF-16 code units.
-			text = text.slice(0, mention.index) + text.slice(mention.index + mention.length);
-			boundary = mention.index;
-		}
+	return envelope.data.events.flatMap(parseEvent);
+}
+
+function parseEvent(event: unknown): IncomingText[] {
+	return parsePostback(event) ?? parseUnsend(event) ?? parsePhoto(event) ?? parseText(event);
+}
+
+function parsePostback(event: unknown): IncomingText[] | null {
+	const postback = z
+		.object({
+			type: z.literal("postback"),
+			mode: z.enum(["active", "standby"]).optional(),
+			webhookEventId: z.string().min(1).max(128),
+			timestamp: z.number().int().nonnegative(),
+			replyToken: z.string().min(1),
+			source: z.object({
+				type: z.literal("group"),
+				groupId: z.string().min(1),
+				userId: z.string().optional(),
+			}),
+			postback: z.object({ data: z.string().max(300) }),
+		})
+		.safeParse(event);
+	if (postback.success) {
+		const v = postback.data;
+		if (v.mode === "standby" || !/^qr:[a-f0-9-]{36}$/.test(v.postback.data)) return [];
 		return [
 			{
-				...(value.webhookEventId ? { eventId: value.webhookEventId } : {}),
-				...(value.message.id ? { messageId: value.message.id } : {}),
-				...(value.message.quotedMessageId
-					? { quotedMessageId: value.message.quotedMessageId }
-					: {}),
-				...(value.source.userId ? { speaker: value.source.userId } : {}),
-				...(value.timestamp !== undefined ? { occurredAt: value.timestamp } : {}),
-				chatType: value.source.type,
-				groupId: value.source.groupId,
-				mentioned: mentions.length > 0,
-				text,
-				replyToken: value.replyToken,
+				eventId: v.webhookEventId,
+				messageId: `postback:${v.webhookEventId}`,
+				occurredAt: v.timestamp,
+				chatType: "group",
+				groupId: v.source.groupId,
+				...(v.source.userId ? { speaker: v.source.userId } : {}),
+				mentioned: false,
+				text: "",
+				replyToken: v.replyToken,
+				postback: v.postback.data,
 			},
 		];
-	});
+	}
+
+	return null;
+}
+
+function parseUnsend(event: unknown): IncomingText[] | null {
+	const unsend = z
+		.object({
+			type: z.literal("unsend"),
+			webhookEventId: z.string(),
+			timestamp: z.number(),
+			source: z.object({ type: z.literal("group"), groupId: z.string() }),
+			unsend: z.object({ messageId: z.string() }),
+		})
+		.safeParse(event);
+	if (unsend.success)
+		return [
+			{
+				eventId: unsend.data.webhookEventId,
+				messageId: unsend.data.unsend.messageId,
+				occurredAt: unsend.data.timestamp,
+				chatType: "group" as const,
+				groupId: unsend.data.source.groupId,
+				mentioned: false,
+				text: "",
+				replyToken: "",
+				unsend: true,
+			},
+		];
+
+	return null;
+}
+
+function parsePhoto(event: unknown): IncomingText[] | null {
+	const photo = z
+		.object({
+			replyToken: z.string().min(1),
+			type: z.literal("message"),
+			mode: z.enum(["active", "standby"]).optional(),
+			webhookEventId: z.string().min(1).max(128),
+			timestamp: z.number().int().nonnegative(),
+			source: z.object({ type: z.literal("group"), groupId: z.string().min(1) }),
+			message: z.object({
+				type: z.literal("image"),
+				id: z.string().regex(/^[0-9]{1,64}$/),
+				contentProvider: z.object({ type: z.literal("line") }),
+			}),
+		})
+		.safeParse(event);
+	if (photo.success) {
+		const v = photo.data;
+		if (v.mode === "standby") return [];
+		return [
+			{
+				eventId: v.webhookEventId,
+				messageId: v.message.id,
+				occurredAt: v.timestamp,
+				chatType: "group",
+				groupId: v.source.groupId,
+				mentioned: false,
+				text: "",
+				replyToken: v.replyToken,
+				image: true,
+			},
+		];
+	}
+
+	return null;
+}
+
+function parseText(event: unknown): IncomingText[] {
+	const result = textEventSchema.safeParse(event);
+	// Non-text, future event types, and standby events require no reply.
+	if (!result.success || result.data.mode === "standby") return [];
+	const value = result.data;
+	const mentions = (value.message.mention?.mentionees ?? [])
+		.filter((mention) => mention.type === "user" && mention.isSelf === true)
+		.sort((left, right) => right.index - left.index);
+	let text = value.message.text;
+	let boundary = text.length;
+	for (const mention of mentions) {
+		if (mention.index + mention.length > boundary) return [];
+		// LINE offsets and JS string indices both count UTF-16 code units.
+		text = text.slice(0, mention.index) + text.slice(mention.index + mention.length);
+		boundary = mention.index;
+	}
+	return [
+		{
+			...(value.webhookEventId ? { eventId: value.webhookEventId } : {}),
+			...(value.message.id ? { messageId: value.message.id } : {}),
+			...(value.message.quotedMessageId ? { quotedMessageId: value.message.quotedMessageId } : {}),
+			...(value.source.userId ? { speaker: value.source.userId } : {}),
+			...(value.timestamp !== undefined ? { occurredAt: value.timestamp } : {}),
+			chatType: value.source.type,
+			groupId: value.source.groupId,
+			mentioned: mentions.length > 0,
+			text,
+			replyToken: value.replyToken,
+		},
+	];
 }

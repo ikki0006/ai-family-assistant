@@ -38,6 +38,9 @@ export function listNameKey(name: string) {
 		.replace(/\s/g, "")
 		.toLowerCase();
 }
+type ListResult = { text: string; confirm?: { listId: string; version: number } };
+type SaveList = (message: string) => Promise<ListResult>;
+type FamilyList = ListState["lists"][number];
 export async function manageLists(
 	repo: FamilyLists,
 	group: string,
@@ -45,7 +48,7 @@ export async function manageLists(
 	action: ListAction,
 	expectedVersion: number,
 	confirmedDelete = false,
-): Promise<{ text: string; confirm?: { listId: string; version: number } }> {
+): Promise<ListResult> {
 	const state = await repo.load(group);
 	if (action.op !== "show" && (await repo.applied(group, event)))
 		return { text: "このリスト操作は反映済みです。" };
@@ -56,7 +59,7 @@ export async function manageLists(
 		aliases: [...l.aliases],
 		items: l.items.map((i) => ({ ...i })),
 	}));
-	let list = lists.find((l) => l.id === action.listId);
+	const list = lists.find((l) => l.id === action.listId);
 	const named = action.name?.trim();
 	const text = action.text?.trim();
 	const save = async (message: string) => ({
@@ -70,53 +73,103 @@ export async function manageLists(
 		lists.reduce((sum, l) => sum + l.items.length, 0) >= 200
 	)
 		return { text: "共有リスト全体で200件までです。不要な項目を削除してください。" };
-	if (action.op === "create") {
-		if (!named) return { text: "リストの名前を教えてください。" };
-		const duplicate = lists.find((l) =>
-			[l.name, ...l.aliases].some((n) => listNameKey(n) === listNameKey(named)),
-		);
-		if (duplicate)
-			return { text: `「${duplicate.name}」はすでにあります。このリストを使ってください。` };
-		if (lists.length >= 20)
-			return { text: "リストは20個までです。不要なリストを削除してください。" };
-		list = { id: `list:${event}`, name: named, aliases: [], items: [] };
-		lists.push(list);
-		if (text) list.items.push({ id: `item:${event}`, text, note: action.note?.trim() ?? "" });
-		return save(`「${named}」を作りました。${text ? `\n「${text}」を追加しました。` : ""}`);
-	}
+	if (action.op === "create") return createList(lists, named, text, action, event, save);
 	if (!list) return { text: "対象のリストを確認できませんでした。リスト名を教えてください。" };
-	if (action.op === "delete") {
-		if (!confirmedDelete)
-			return {
-				text: `「${list.name}」をリストごと削除しますか？中の${list.items.length}件も削除されます。`,
-				confirm: { listId: list.id, version: state.version },
-			};
-		lists.splice(lists.indexOf(list), 1);
-		return save(`「${list.name}」を削除しました。`);
-	}
-	if (action.op === "rename") {
-		if (!named) return { text: "新しいリスト名を教えてください。" };
-		if (
-			lists.some(
-				(l) =>
-					l.id !== list.id &&
-					[l.name, ...l.aliases].some((n) => listNameKey(n) === listNameKey(named)),
-			)
+	if (action.op === "delete") return deleteList(list, lists, confirmedDelete, state.version, save);
+	if (action.op === "rename") return renameList(list, lists, named, save);
+	if (action.op === "add") return addItem(list, text, action, event, save);
+	return editItem(list, action, text, save);
+}
+export function renderLists(state: ListState, id?: string, page = 1) {
+	if (!id)
+		return state.lists.length
+			? `共有リスト\n${state.lists.map((l) => `・${l.name}（${l.items.length}件）`).join("\n")}`
+			: "共有リストはまだありません。";
+	const list = state.lists.find((l) => l.id === id);
+	if (!list) return "対象のリストが見つかりません。";
+	const items = list.items.slice((page - 1) * 4, page * 4);
+	return `「${list.name}」${list.items.length}件\n${items.map((i, n) => `${(page - 1) * 4 + n + 1}. ${i.text}${i.note ? `：${i.note}` : ""}`).join("\n") || "このページには項目がありません。"}\n${page}/${Math.max(1, Math.ceil(list.items.length / 4))}ページ${page * 4 < list.items.length ? "（続きを聞いてください）" : ""}`;
+}
+
+async function createList(
+	lists: FamilyList[],
+	named: string | undefined,
+	text: string | undefined,
+	action: ListAction,
+	event: string,
+	save: SaveList,
+): Promise<ListResult> {
+	if (!named) return { text: "リストの名前を教えてください。" };
+	const duplicate = lists.find((l) =>
+		[l.name, ...l.aliases].some((n) => listNameKey(n) === listNameKey(named)),
+	);
+	if (duplicate)
+		return { text: `「${duplicate.name}」はすでにあります。このリストを使ってください。` };
+	if (lists.length >= 20) return { text: "リストは20個までです。不要なリストを削除してください。" };
+	const list: FamilyList = { id: `list:${event}`, name: named, aliases: [], items: [] };
+	lists.push(list);
+	if (text) list.items.push({ id: `item:${event}`, text, note: action.note?.trim() ?? "" });
+	return save(`「${named}」を作りました。${text ? `\n「${text}」を追加しました。` : ""}`);
+}
+
+async function deleteList(
+	list: FamilyList,
+	lists: FamilyList[],
+	confirmedDelete: boolean,
+	version: number,
+	save: SaveList,
+): Promise<ListResult> {
+	if (!confirmedDelete)
+		return {
+			text: `「${list.name}」をリストごと削除しますか？中の${list.items.length}件も削除されます。`,
+			confirm: { listId: list.id, version },
+		};
+	lists.splice(lists.indexOf(list), 1);
+	return save(`「${list.name}」を削除しました。`);
+}
+
+async function renameList(
+	list: FamilyList,
+	lists: FamilyList[],
+	named: string | undefined,
+	save: SaveList,
+): Promise<ListResult> {
+	if (!named) return { text: "新しいリスト名を教えてください。" };
+	if (
+		lists.some(
+			(l) =>
+				l.id !== list.id &&
+				[l.name, ...l.aliases].some((n) => listNameKey(n) === listNameKey(named)),
 		)
-			return { text: "同じ名前・呼び名のリストがあります。別の名前にしますか？" };
-		list.aliases = [...new Set([...list.aliases, list.name])].filter((n) => n !== named).slice(-5);
-		list.name = named;
-		return save(`リスト名を「${named}」に変更しました。`);
-	}
-	if (action.op === "add") {
-		if (!text) return { text: "追加する項目を教えてください。" };
-		if (list.items.some((i) => listNameKey(i.text) === listNameKey(text)))
-			return { text: `「${text}」は「${list.name}」に登録済みです。` };
-		if (list.items.length >= 50)
-			return { text: "1リストは50件までです。不要な項目を削除してください。" };
-		list.items.push({ id: `item:${event}`, text, note: action.note?.trim() ?? "" });
-		return save(`「${list.name}」に「${text}」を追加しました。`);
-	}
+	)
+		return { text: "同じ名前・呼び名のリストがあります。別の名前にしますか？" };
+	list.aliases = [...new Set([...list.aliases, list.name])].filter((n) => n !== named).slice(-5);
+	list.name = named;
+	return save(`リスト名を「${named}」に変更しました。`);
+}
+
+async function addItem(
+	list: FamilyList,
+	text: string | undefined,
+	action: ListAction,
+	event: string,
+	save: SaveList,
+): Promise<ListResult> {
+	if (!text) return { text: "追加する項目を教えてください。" };
+	if (list.items.some((i) => listNameKey(i.text) === listNameKey(text)))
+		return { text: `「${text}」は「${list.name}」に登録済みです。` };
+	if (list.items.length >= 50)
+		return { text: "1リストは50件までです。不要な項目を削除してください。" };
+	list.items.push({ id: `item:${event}`, text, note: action.note?.trim() ?? "" });
+	return save(`「${list.name}」に「${text}」を追加しました。`);
+}
+
+async function editItem(
+	list: FamilyList,
+	action: ListAction,
+	text: string | undefined,
+	save: SaveList,
+): Promise<ListResult> {
 	const item = list.items.find((i) => i.id === action.itemId);
 	if (!item) return { text: "対象の項目が見つかりません。どの項目か教えてください。" };
 	if (action.op === "remove") {
@@ -129,14 +182,4 @@ export async function manageLists(
 	if (text) item.text = text;
 	if (action.note !== undefined) item.note = action.note.trim();
 	return save(`「${list.name}」の「${item.text}」を更新しました。`);
-}
-export function renderLists(state: ListState, id?: string, page = 1) {
-	if (!id)
-		return state.lists.length
-			? `共有リスト\n${state.lists.map((l) => `・${l.name}（${l.items.length}件）`).join("\n")}`
-			: "共有リストはまだありません。";
-	const list = state.lists.find((l) => l.id === id);
-	if (!list) return "対象のリストが見つかりません。";
-	const items = list.items.slice((page - 1) * 4, page * 4);
-	return `「${list.name}」${list.items.length}件\n${items.map((i, n) => `${(page - 1) * 4 + n + 1}. ${i.text}${i.note ? `：${i.note}` : ""}`).join("\n") || "このページには項目がありません。"}\n${page}/${Math.max(1, Math.ceil(list.items.length / 4))}ページ${page * 4 < list.items.length ? "（続きを聞いてください）" : ""}`;
 }
